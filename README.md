@@ -96,3 +96,17 @@ node scripts/verify.mjs
 <script src="dist/mermaid.rounded.min.js"></script>
 <script src="dist/mermaid-rounded.arrows.js"></script>
 ```
+
+## 配色主题 + 子图圆角（dist/mermaid-rounded.themes.js）
+
+```js
+MermaidRounded.useTheme('tokyo');                    // linear / github / tokyo / nord
+mermaid.initialize(MermaidRounded.config('tokyo'));   // 下次 render 生效
+```
+
+- 四套主题：`linear`（浅色，默认）、`github`（浅色）、`tokyo`（深色 Tokyo Night）、`nord`（深色）。
+  每套只定义 mermaid 真正会读的变量（`primaryColor` / `primaryBorderColor` / `lineColor` /
+  `clusterBkg` / `edgeLabelBackground` 等），其余交给 `theme: 'base'` 继承。
+- **子图容器圆角**走 CSS 的 `rx`（SVG2 几何属性），不动泳道/子图两条绘图代码路径：
+  `.cluster rect { rx: 8px }`。实测渲染后 `getComputedStyle(rect).rx === '8px'`。
+- 主题本质是配置 + CSS，所以和 `mermaid.rounded.min.js` 解耦：不用主题也能单独用。

@@ -6,84 +6,65 @@
 <title>mermaid-rounded · 渲染画廊</title>
 <style>
   :root{--bg:#f7f8fa;--card:#fff;--line:#e6e8ec;--ink:#1c1f23;--ink2:#5a626e;--ink3:#8b939f;
-    --accent:#2f6df6;--good:#0f8a5f;--code:#f3f4f7}
+    --accent:#2f6df6;--code:#f3f4f7}
   *{box-sizing:border-box}
-  body{margin:0;padding:28px 24px 64px;background:var(--bg);color:var(--ink);
+  body{margin:0;padding:26px 24px 64px;background:var(--bg);color:var(--ink);
     font:14px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC",Arial,sans-serif;-webkit-font-smoothing:antialiased}
-  .wrap{max-width:1300px;margin:0 auto}
+  .wrap{max-width:1320px;margin:0 auto}
   h1{font-size:20px;font-weight:650;margin:0 0 4px}
-  .sub{color:var(--ink2);font-size:13px;margin-bottom:22px}
-  .sub code{background:#eef1f6;padding:1px 6px;border-radius:4px;font:12px ui-monospace,Menlo,monospace}
+  .sub{color:var(--ink2);font-size:13px;margin-bottom:16px}
+  .bar{display:flex;gap:8px;align-items:center;margin-bottom:20px;flex-wrap:wrap}
+  .bar span{font-size:12px;color:var(--ink3);margin-right:4px}
+  .bar button{border:1px solid var(--line);background:#fff;color:#3b4657;border-radius:8px;
+    padding:5px 12px;font-size:12.5px;cursor:pointer;transition:.15s}
+  .bar button:hover{border-color:#c7d0dd}
+  .bar button.on{background:var(--accent);border-color:var(--accent);color:#fff}
   .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
   @media (max-width:1000px){.grid{grid-template-columns:1fr}}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;
-    display:flex;flex-direction:column}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+  .card.dark{background:#1a1b26;border-color:#2a2f45}
   .hd{display:flex;align-items:baseline;gap:9px;padding:13px 17px 10px;border-bottom:1px solid var(--line)}
+  .card.dark .hd{border-color:#2a2f45}
   .hd h2{font-size:13.5px;font-weight:640;margin:0}
-  .hd .tag{font-size:11px;font-weight:650;letter-spacing:.4px;color:#fff;background:var(--accent);
-    border-radius:5px;padding:2px 7px}
-  .hd .tag.g{background:var(--good)}
+  .card.dark .hd h2{color:#c0caf5}
+  .hd .tag{font-size:11px;font-weight:650;letter-spacing:.4px;color:#fff;background:var(--accent);border-radius:5px;padding:2px 7px}
   .hd .note{margin-left:auto;font:11px/1 ui-monospace,Menlo,monospace;color:var(--ink3)}
   .cv{padding:16px 14px;display:flex;justify-content:center;align-items:center;min-height:150px;overflow:auto}
   .cv svg{max-width:100%;height:auto}
   details{border-top:1px solid var(--line)}
-  summary{cursor:pointer;padding:8px 17px;font:11.5px/1.4 ui-monospace,Menlo,monospace;color:var(--ink3);
-    outline:none;user-select:none}
-  summary:hover{color:var(--ink2)}
-  pre{margin:0;padding:10px 17px 14px;background:var(--code);font:11.5px/1.65 ui-monospace,Menlo,monospace;
-    color:#33383f;overflow:auto;white-space:pre}
+  .card.dark details{border-color:#2a2f45}
+  summary{cursor:pointer;padding:8px 17px;font:11.5px/1.4 ui-monospace,Menlo,monospace;color:var(--ink3);outline:none;user-select:none}
+  pre{margin:0;padding:10px 17px 14px;background:var(--code);font:11.5px/1.65 ui-monospace,Menlo,monospace;color:#33383f;overflow:auto;white-space:pre}
   .wide{grid-column:1/-1}
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>mermaid-rounded 渲染画廊</h1>
-  <div class="sub">全部由改造后的 bundle 渲染（判定框=圆角矩形、全圆角、宽度随文字）。<code>demo/gallery.html</code></div>
+  <div class="sub">判定框=圆角矩形 · 方框宽度随文字 · 子图容器圆角 · 多套配色（<code>demo/gallery.html</code>）</div>
+  <div class="bar" id="bar"><span>配色</span></div>
   <div class="grid" id="grid"></div>
 </div>
 
 <script src="../dist/mermaid.rounded.min.js"></script>
 <script src="../dist/mermaid-rounded.arrows.js"></script>
+<script src="../dist/mermaid-rounded.themes.js"></script>
 <script>
-mermaid.initialize({
-  startOnLoad: false,
-  theme: 'base',
-  themeVariables: {
-    fontFamily: '-apple-system,BlinkMacSystemFont,"PingFang SC",Arial,sans-serif',
-    fontSize: '13px',
-    primaryColor: '#eef2ff',
-    primaryBorderColor: '#9aa8c8',
-    primaryTextColor: '#1c1f23',
-    lineColor: '#8a94a3',
-    edgeLabelBackground: '#ffffff',
-    clusterBkg: '#fafbfd',
-    clusterBorder: '#c9d0db'
-  },
-  flowchart: { curve: 'basis', nodeSpacing: 42, rankSpacing: 40, padding: 12, useMaxWidth: true }
-});
-
 const CASES = [
   { id:'basic', tag:'基本', title:'三步直线', note:'宽度随文字',
-    hint:'看方框：两个字就是小方框，不再统一 120px。',
     code:`flowchart TD
     A[提交申请] --> B[资料初审] --> C[归档]` },
-
   { id:'branch', tag:'判定', title:'判定 + 双分支', note:'不再是菱形',
-    hint:'判定框现在是圆角矩形，与普通步骤框仅靠左右多 2px 内边距区分。',
     code:`flowchart TD
     A[收到申请] --> B{资料齐全}
     B -->|是| C[进入审批]
     B -->|否| D[退回补充]` },
-
   { id:'long', tag:'判定', title:'长条件判定', note:'自动折行',
-    hint:'33 字条件：上游是 263×263 的空心大方块，这里是横向长方形。',
     code:`flowchart TD
     A[提交] --> B{申请资料是否齐全且签章有效金额未超限且客户不在风险名单内}
     B -->|是| C[通过]
     B -->|否| D[退回]` },
-
-  { id:'multi', tag:'判定', title:'多级判定串联', note:'纵向更紧凑',
-    hint:'每个判定都省下大量纵向空间，整张图高度明显下降。',
+  { id:'multi', tag:'判定', title:'多级判定串联', note:'纵向更紧凑', wide:true,
     code:`flowchart TD
     A[发起] --> B{金额超限}
     B -->|是| C{需要副总审批}
@@ -96,19 +77,7 @@ const CASES = [
     F --> I
     G --> I
     H --> I` },
-
-  { id:'shapes', tag:'形状', title:'形状全家桶', note:'圆角只作用于矩形族',
-    hint:'stadium/圆/圆柱保持原样；六边形、梯形、平行四边形的尖角做了柔化。',
-    code:`flowchart LR
-    R[矩形步骤] --> RD(圆角)
-    RD --> ST([体育场形])
-    ST --> HEX{{六边形}}
-    HEX --> TR[/平行四边形/]
-    TR --> CY[(数据库)]
-    CY --> CIR((圆形))` },
-
-  { id:'sub', tag:'子图', title:'子图分成', note:'容器圆角 + 内框圆角',
-    hint:'子图背景仍是直角容器（上游行为），内部节点已经是圆角。这块可以再优化。',
+  { id:'sub', tag:'子图', title:'子图分成', note:'容器也圆角了',
     code:`flowchart TD
     A[提交] --> B{是否需要复核}
     B -->|是| S1
@@ -119,9 +88,7 @@ const CASES = [
     B -->|否| D[直接通过]
     S1 --> E[归档]
     D --> E` },
-
   { id:'lr', tag:'方向', title:'横向 LR', note:'长链横铺',
-    hint:'横向时圆角矩形更省空间，流水线读起来更顺。',
     code:`flowchart LR
     A[接收工单] --> B{是否紧急}
     B -->|是| C[立即分派]
@@ -129,16 +96,12 @@ const CASES = [
     C --> E[处理中]
     D --> E
     E --> F[完成归档]` },
-
   { id:'edge', tag:'边标签', title:'长边标签折行', note:'判定说短话',
-    hint:'推荐写法：判定框只说「能否通过」，具体条件放边标签，判定框保持小尺寸。',
     code:`flowchart TD
     A[提交] --> B{能否通过}
     B -->|资料齐全且签章有效<br/>金额未超限<br/>且不在风险名单| C[通过]
     B -->|以上任一不满足| D[退回]` },
-
-  { id:'state', tag:'状态图', title:'状态图也受益', note:'状态框统一圆角',
-    hint:'stateDiagram 的节点同样走 drawRect，圆角与流程图一致。',
+  { id:'state', tag:'状态图', title:'状态图', note:'文字居中 + 圆角',
     code:`stateDiagram-v2
     [*] --> 待提交
     待提交 --> 审核中: 提交
@@ -146,42 +109,66 @@ const CASES = [
     审核中 --> 已驳回: 驳回
     已驳回 --> 待提交: 修改
     已通过 --> [*]` },
-
-  { id:'custom', tag:'可调', title:'运行时可调参数', note:'radius / padding',
-    hint:'window.__MERMAID_ROUNDED 可在渲染前改半径与内边距，不用重新打补丁。',
-    runtime:{ radius: 18, paddingX: 20, paddingY: 12, minWidth: 64 },
-    code:`flowchart TD
-    A[大圆角 + 宽内边距] --> B{看起来更柔和}
-    B -->|是| C[对比默认半径 8]
-    B -->|否| D[改回 8 即可]` }
+  { id:'shapes', tag:'形状', title:'形状展示', note:'矩形族圆角',
+    code:`flowchart LR
+    R[矩形] --> RD(圆角)
+    RD --> ST([体育场形])
+    ST --> CY[(数据库)]
+    CY --> CIR((圆形))` }
 ];
 
 const grid = document.getElementById('grid');
-window.__counts = [];
+const bar = document.getElementById('bar');
+let themeName = 'linear';
 
-(async () => {
+CASES.forEach(function (c) {
+  const card = document.createElement('section');
+  card.className = 'card' + (c.wide ? ' wide' : '');
+  card.innerHTML = `<div class="hd"><span class="tag">${c.tag}</span><h2>${c.title}</h2>
+      <span class="note">${c.note}</span></div>
+    <div class="cv" id="cv-${c.id}"></div>
+    <details><summary>查看源码</summary><pre></pre></details>`;
+  card.querySelector('pre').textContent = c.code;
+  grid.appendChild(card);
+});
+
+async function renderAll() {
+  const cfg = MermaidRounded.config(themeName);
+  mermaid.initialize(Object.assign({ startOnLoad: false }, cfg));
+  const dark = MermaidRounded.isDark();
+  document.querySelectorAll('.card').forEach(function (el) {
+    el.classList.toggle('dark', dark);
+  });
   for (const c of CASES) {
-    const card = document.createElement('section');
-    card.className = 'card' + (c.id === 'multi' || c.id === 'shapes' ? ' wide' : '');
-    card.innerHTML = `<div class="hd"><span class="tag ${c.id === 'custom' ? 'g' : ''}">${c.tag}</span>
-        <h2>${c.title}</h2><span class="note">${c.note}</span></div>
-      <div class="cv"><div style="color:#8b939f;font-size:12px">渲染中…</div></div>
-      <details><summary>查看源码</summary><pre></pre></details>`;
-    card.querySelector('pre').textContent = c.code;
-    grid.appendChild(card);
-
-    if (c.runtime) window.__MERMAID_ROUNDED = c.runtime;
+    const host = document.getElementById('cv-' + c.id);
     try {
-      const { svg } = await mermaid.render('g-' + c.id, c.code);
-      card.querySelector('.cv').innerHTML = svg;
+      const { svg } = await mermaid.render('g-' + c.id + '-' + themeName, c.code);
+      host.innerHTML = svg;
     } catch (e) {
-      card.querySelector('.cv').innerHTML = '<div style="color:#b42318;font:12px monospace">渲染失败：' + e.message + '</div>';
+      host.innerHTML = '<div style="color:#b42318;font:12px monospace">渲染失败：' + e.message + '</div>';
     }
-    if (c.runtime) delete window.__MERMAID_ROUNDED;
-    window.__counts.push(c.id);
   }
   window.__done = true;
-})();
+}
+
+Object.keys(MermaidRounded.themes).forEach(function (key) {
+  const btn = document.createElement('button');
+  btn.textContent = MermaidRounded.themes[key].label;
+  btn.dataset.theme = key;
+  btn.onclick = function () {
+    themeName = key;
+    MermaidRounded.useTheme(key);
+    document.querySelectorAll('.bar button').forEach(function (b) {
+      b.classList.toggle('on', b.dataset.theme === key);
+    });
+    renderAll();
+  };
+  if (key === themeName) btn.classList.add('on');
+  bar.appendChild(btn);
+});
+
+MermaidRounded.useTheme(themeName);
+renderAll();
 </script>
 </body>
 </html>
