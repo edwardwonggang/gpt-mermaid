@@ -16,13 +16,22 @@
  *       竖段仍重合 → 天然一根干线，且不产生斜线。
  *   LR：末段水平 → 同理改 y。
  *
+ * ⚠️ 已知问题（2026-11-12）
+ * 这条路走不通：靠后处理改 `d` 无法稳定得到「一根干线 + 引导段」。
+ * mermaid 的边由多段 L/Q 混合构成，各边的拐点位置也不一致；只改末尾坐标会：
+ *   · 横段末梢停在箭头上，留下横向残段；
+ *   · 曲线段被改坐标 → 出斜线；
+ *   · 改错朝向判断 → 布局崩坏。
+ * 正确做法是在**路由层**（mermaid 的 edge routing / 正交路由）合并，而不是改渲染后的 SVG。
+ * 因此默认关闭；需要尝试时设 window.__MR_ARROWS.enabled = true 再调用。
+ *
  * 用法：
  *   1) 自动：放在 mermaid 之后引入（MutationObserver 监听 svg 插入）
  *   2) 手动：window.mermaidRoundedFixArrows(svgOrContainer)
  */
 (function () {
   var cfg = (window.__MR_ARROWS = window.__MR_ARROWS || {});
-  if (cfg.enabled == null) cfg.enabled = true;
+  if (cfg.enabled == null) cfg.enabled = false; // 默认关闭：见文件头「已知问题」
 
   // 把 d 里的数字全部取出来（含 index），坐标是成对出现的：
   // 最后 4 个数字 = 角点(x,y) + 终点(x,y)
@@ -53,6 +62,7 @@
   }
 
   function fix(root) {
+    if (!cfg.enabled) return root; // 需要显式开启
     if (!root || !root.querySelectorAll) return root;
     var svg = root.tagName && root.tagName.toLowerCase() === 'svg' ? root : root.querySelector('svg');
     if (!svg) return root;
@@ -60,54 +70,78 @@
     var paths = Array.prototype.slice.call(svg.querySelectorAll('path[marker-end]'));
     if (paths.length < 2) return root;
 
-    // 按目标节点分组：边 id 形如 L_A_F_0 / L-B-C-1，倒数第二段是目标节点
+    // 按目标节点分组：边 id 形如 <render>-L_A_F_0，倒数第二段是目标节点
     var groups = new Map();
     paths.forEach(function (p, i) {
       var id = p.id || '';
-      // 边 id 带渲染前缀，如 q1-L_A_F_0 / mermaid-1-L-A-F-0
       var m = id.match(/L[-_]([^-_]+)[-_]([^-_]+)[-_]\d+$/);
-      var key = m ? 'to:' + m[2] : 'solo:' + i;
+      var key = m ? m[2] : 'solo:' + i;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(p);
     });
 
-    groups.forEach(function (group) {
+    var LEAD = (cfg.lead == null ? 16 : cfg.lead);
+
+    function findNodeBox(to) {
+      var nodes = Array.prototype.slice.call(svg.querySelectorAll('g.node'));
+      for (var i = 0; i < nodes.length; i++) {
+        var id = nodes[i].id || '';
+        // 节点 id 形如 <render>-flowchart-F-9
+        if (new RegExp('[-_]' + to.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[-_]\\d+$').test(id)) {
+          try { return nodes[i].getBBox(); } catch (e) { return null; }
+        }
+      }
+      return null;
+    }
+
+    groups.forEach(function (group, key) {
       if (group.length < 2) return;
 
-      var sample = tailPoints(group[0].getAttribute('d') || '');
-      if (sample.length < 2) return;
-      var vertical = Math.abs(sample[1].x - sample[0].x) < 0.5; // TD 型：末段竖直
+      // 用第一条边判断朝向：看它的起点更靠上/下（TD）还是更靠左/右（LR）
+      var first = group[0];
+      var box = findNodeBox(key);
+      if (!box) return;
 
-      // 锚点取终点坐标的中位数，落在哪条轴上就对齐哪条
-      var coords = [];
-      group.forEach(function (p) {
-        var t = tailPoints(p.getAttribute('d') || '');
-        if (t.length === 2) coords.push(vertical ? t[1].x : t[1].y);
+      // 取所有边的起点，判断是纵向汇入还是横向汇入
+      var starts = group.map(function (p) {
+        try { var pt = p.getPointAtLength(0); return { x: pt.x, y: pt.y }; } catch (e) { return null; }
       });
-      if (!coords.length) return;
-      coords.sort(function (a, b) { return a - b; });
-      var anchor = coords[Math.floor(coords.length / 2)];
+      if (starts.some(function (s) { return !s; })) return;
+
+      // 目标框中心；纵向时用 x，横向时用 y
+      var cx = box.x + box.width / 2;
+      var cy = box.y + box.height / 2;
+      // 起点在节点的上下两侧 → 纵向汇入；在左右两侧 → 横向汇入
+      var vertical = starts[0].y < box.y || starts[0].y > box.y + box.height;
+
+      var anchor, entry, join;
+      if (vertical) {
+        anchor = cx;
+        entry = starts[0].y < box.y ? box.y : box.y + box.height; // 从哪边进
+        join = entry + (starts[0].y < box.y ? -LEAD : LEAD);
+      } else {
+        anchor = cy;
+        entry = box.x;
+        join = entry - LEAD;
+      }
 
       group.forEach(function (p, idx) {
-        var d = p.getAttribute('d') || '';
-        var t = tailPoints(d);
-        if (t.length < 2) return;
-        var corner = { x: t[0].x, y: t[0].y };
-        var end = { x: t[1].x, y: t[1].y };
-
+        var s0 = starts[idx];
+        var d;
         if (vertical) {
-          corner.x = anchor;
-          end.x = anchor;
+          // 起点 → 竖直下到母线 → 横移到锚点 → 竖直进节点（引导段）
+          d = 'M' + s0.x + ',' + s0.y +
+              'L' + s0.x + ',' + join +
+              'L' + anchor + ',' + join +
+              'L' + anchor + ',' + entry;
         } else {
-          corner.y = anchor;
-          end.y = anchor;
+          d = 'M' + s0.x + ',' + s0.y +
+              'L' + join + ',' + s0.y +
+              'L' + join + ',' + anchor +
+              'L' + entry + ',' + anchor;
         }
-        // 先改终点、再改角点（每次都重新解析，避免 index 位移）
-        d = setPair(d, 1, end);
-        d = setPair(d, 2, corner);
         p.setAttribute('d', d);
-
-        if (idx > 0) p.removeAttribute('marker-end'); // 只保留一个箭头
+        if (idx > 0) p.removeAttribute('marker-end');
       });
     });
 
