@@ -123,9 +123,12 @@ js = replaceOnce(
     // bbox 在这里不可信：上游 label 的 div 被 max-width:wrappingWidth(120) 拉满，
     // 于是 bbox.width 恒为 120，「提」和「提交申请」算出一样的 152px。
     // 直接量内层文字（.nodeLabel）的真实宽度作为基准，文字没有时才退回 bbox。
-    const __labelEl = shapeSvg.node().querySelector(".nodeLabel");
+    const __rootEl = shapeSvg.node();
+    const __divEl = __rootEl.querySelector("foreignObject div");
+    const __labelEl = __rootEl.querySelector(".nodeLabel");
+    const __divW = __divEl ? __divEl.getBoundingClientRect().width : 0;
     const __textW = __labelEl ? __labelEl.getBoundingClientRect().width : 0;
-    const __basisW = __textW > 1 ? __textW : bbox.width;
+    const __basisW = __divW > 1 ? __divW : (__textW > 1 ? __textW : bbox.width);
     // node.width 若是测量残留（= wrappingWidth），按未设置处理
     const __wrapW = getConfig2()?.flowchart?.wrappingWidth ?? 200;
     const __nodeW = node2 && typeof node2.width === "number" && Math.abs(node2.width - __wrapW) > 0.5
@@ -239,6 +242,58 @@ js = replaceOnce(
       }
     }
     // ===== end mermaid-rounded =====`
+);
+
+// ---------------------------------------------------------------------------
+// 5b. 收紧 foreignObject 外壳：上游把它设成 10×wrappingWidth（默认 1200px，截断后 120），
+//     即使里面的 div 已经收缩到 26px，外壳仍是 120px —— 于是 g.getBBox() 恒为 120，
+//     节点看起来"被撑宽"，其它按 bbox 取尺寸的地方也会跟着算错。
+// ---------------------------------------------------------------------------
+js = replaceOnce(
+  js,
+  '收紧 foreignObject 外壳',
+  `    const bbox = await fastdom_default2.measure(() => div.node().getBoundingClientRect());
+    if (bbox.width === width3) {`,
+  `    const bbox = await fastdom_default2.measure(() => div.node().getBoundingClientRect());
+    // ===== mermaid-rounded =====
+    fo.attr("width", bbox.width + "px").attr("height", bbox.height + "px");
+    // ===== end mermaid-rounded =====
+    if (bbox.width === width3) {`
+);
+
+// ---------------------------------------------------------------------------
+// 5c. 清掉「测量残留」的 node.width
+//     上游在离屏测量阶段会把 label 宽（= wrappingWidth，默认 120）写进 node.width。
+//     矩形族已在 drawRect 里做了判断，但六边形/体育场形/圆柱/平行四边形等是各自
+//     用 `node.width ? node.width : bbox.width` 算宽度 —— 于是「六边形」这种 3 个字的
+//     标签也会撑成 200px 宽。统一在 labelHelper 入口把「等于 wrappingWidth」的值清掉，
+//     让所有形状都退回按文字宽度计算。
+// ---------------------------------------------------------------------------
+js = replaceOnce(
+  js,
+  '清理各形状的 node.width 残留',
+  `      labelHelper = /* @__PURE__ */ __name(async (parent4, node2, _classes, { ignoreMinWidth = false } = {}) => {
+        if (node2.stereotype !== void 0) {`,
+  `      labelHelper = /* @__PURE__ */ __name(async (parent4, node2, _classes, { ignoreMinWidth = false } = {}) => {
+        // ===== mermaid-rounded =====
+        if (node2 && typeof node2.width === "number") {
+          const __w = getConfig2()?.flowchart?.wrappingWidth ?? 200;
+          if (Math.abs(node2.width - __w) <= 0.5) {
+            node2.width = void 0;
+          }
+        }
+        // ===== end mermaid-rounded =====
+        if (node2.stereotype !== void 0) {`
+);
+
+// ---------------------------------------------------------------------------
+// 5d. 状态图圆角与流程图统一（上游 rx 5 / neo 3）
+// ---------------------------------------------------------------------------
+js = replaceOnce(
+  js,
+  '状态图圆角统一为 radius',
+  `      rx: node2.look === "neo" ? 3 : 5,`,
+  `      rx: __mrStyle(node2).radius,`
 );
 
 // ---------------------------------------------------------------------------
