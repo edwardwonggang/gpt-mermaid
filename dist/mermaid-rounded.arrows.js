@@ -1,163 +1,137 @@
 /**
- * mermaid-rounded.arrows.js —— 汇合的箭头只保留一个
+ * mermaid-rounded.arrows.js —— 多条边汇入同一节点时合并成一根干线
  *
- * 问题：多条边汇到同一个节点时，mermaid 给每条边各画一个箭头，三四个箭头并排挤在
- *      节点上方，看起来像「一坨」。
- * 做法：渲染完成后按「汇入同一个节点」分组，把所有终点吸附到节点边界上的同一个点，
- *      只保留第一个箭头。比按距离聚类稳（边上终点常相隔 20px 左右，聚类容易漏）。
+ * 目标：`A --> C` 和 `B --> C` 这种汇合，不要几条线各带一个箭头并排挤在节点上方，
+ *      而是**线也合成一根**：各条边先沿轴向收到同一条线上，再一起进节点，
+ *      拐角保持直角，只留一个箭头。
  *
- * 用法（二选一）：
- *   1) 自动：放在 mermaid 之后引入，会自己包住 mermaid.render
- *      <script src="mermaid.rounded.min.js"></script>
- *      <script src="mermaid-rounded.arrows.js"></script>
- *   2) 手动：对已渲染的 <svg> 元素调用
- *      window.mermaidRoundedFixArrows(svgElement)
+ * 【为什么这样做】
+ * 上一版只把终点挪到同一点，没动它前面那个角点，于是：
+ *   · 原本 竖直→竖直 的一段被拽成斜线；
+ *   · 末段方向变了，marker 自动旋转，箭头就歪了；
+ *   · 还对 svg 字符串做了 DOMParser→XMLSerializer 往返，foreignObject 里的 XHTML
+ *     闭合标签被破坏，整张图解析报错。
+ * 正确做法是把「角点」和「终点」一起搬到同一条轴线上：
+ *   TD：末段竖直 → 把倒数第二个点(角点)和终点的 x 都改成锚点 x，横段自然延长，
+ *       竖段仍重合 → 天然一根干线，且不产生斜线。
+ *   LR：末段水平 → 同理改 y。
+ *
+ * 用法：
+ *   1) 自动：放在 mermaid 之后引入（MutationObserver 监听 svg 插入）
+ *   2) 手动：window.mermaidRoundedFixArrows(svgOrContainer)
  */
 (function () {
-  var CLUSTER = 26; // 终点相距 26px 内视为同一簇（支持链式合并）
+  var cfg = (window.__MR_ARROWS = window.__MR_ARROWS || {});
+  if (cfg.enabled == null) cfg.enabled = true;
 
-  function endPoint(path) {
-    try {
-      return path.getPointAtLength(path.getTotalLength());
-    } catch (e) {
-      return null;
-    }
+  // 把 d 里的数字全部取出来（含 index），坐标是成对出现的：
+  // 最后 4 个数字 = 角点(x,y) + 终点(x,y)
+  function numTokens(d) {
+    var re = /-?\d*\.?\d+/g;
+    var out = [];
+    var m;
+    while ((m = re.exec(d)) !== null) out.push({ raw: m[0], index: m.index });
+    return out;
   }
 
-  // 只改最后一对坐标（mermaid 的边终点形如 `L x,y` 或曲线收尾的 `x,y`）
-  function snapTail(path, x, y) {
-    var d = path.getAttribute('d') || '';
-    var m = d.match(/(-?[\d.]+)[,\s]+(-?[\d.]+)\s*$/);
-    if (!m) return;
-    var nx = Math.round(x * 100) / 100;
-    var ny = Math.round(y * 100) / 100;
-    path.setAttribute('d', d.slice(0, m.index) + nx + ',' + ny);
+  function tailPoints(d) {
+    var t = numTokens(d);
+    if (t.length < 4) return [];
+    var n = t.slice(-4).map(function (x) { return parseFloat(x.raw); });
+    return [{ x: n[0], y: n[1] }, { x: n[2], y: n[3] }]; // [角点, 终点]
   }
 
-  // 点是否落在矩形边界上（含容差）
-  function onBorder(pt, box, tol) {
-    var inX = pt.x >= box.x - tol && pt.x <= box.x + box.width + tol;
-    var inY = pt.y >= box.y - tol && pt.y <= box.y + box.height + tol;
-    if (!inX || !inY) return false;
-    var nearTop = Math.abs(pt.y - box.y) <= tol;
-    var nearBottom = Math.abs(pt.y - (box.y + box.height)) <= tol;
-    var nearLeft = Math.abs(pt.x - box.x) <= tol;
-    var nearRight = Math.abs(pt.x - (box.x + box.width)) <= tol;
-    return nearTop || nearBottom || nearLeft || nearRight;
-  }
-
-  // 把点投到矩形最近的边上
-  function project(pt, box) {
-    var cx = Math.min(Math.max(pt.x, box.x), box.x + box.width);
-    var cy = Math.min(Math.max(pt.y, box.y), box.y + box.height);
-    var dTop = Math.abs(cy - box.y), dBottom = Math.abs(box.y + box.height - cy);
-    var dLeft = Math.abs(cx - box.x), dRight = Math.abs(box.x + box.width - cx);
-    var min = Math.min(dTop, dBottom, dLeft, dRight);
-    if (min === dTop) return { x: cx, y: box.y };
-    if (min === dBottom) return { x: cx, y: box.y + box.height };
-    if (min === dLeft) return { x: box.x, y: cy };
-    return { x: box.x + box.width, y: cy };
+  // 只替换某一对坐标的字符区间，命令字母和分隔符全部保留
+  // whichFromEnd: 1 = 最后一对（终点），2 = 倒数第二对（角点）
+  function setPair(d, whichFromEnd, p) {
+    var t = numTokens(d);
+    if (t.length < 4) return d;
+    var i = t.length - (whichFromEnd === 1 ? 2 : 4);
+    var from = t[i].index;
+    var to = t[i + 1].index + t[i + 1].raw.length;
+    return d.slice(0, from) + p.x + ',' + p.y + d.slice(to);
   }
 
   function fix(root) {
     if (!root || !root.querySelectorAll) return root;
+    var svg = root.tagName && root.tagName.toLowerCase() === 'svg' ? root : root.querySelector('svg');
+    if (!svg) return root;
 
-    var paths = Array.prototype.slice.call(root.querySelectorAll('path[marker-end]'));
+    var paths = Array.prototype.slice.call(svg.querySelectorAll('path[marker-end]'));
     if (paths.length < 2) return root;
 
-    var items = [];
-    paths.forEach(function (p) {
-      var pt = endPoint(p);
-      if (pt) items.push({ p: p, pt: pt });
-    });
-    if (items.length < 2) return root;
-
-    // 并查集：终点相距 ≤26px 就连成一簇（边长常相隔 20px，必须支持链式合并）
-    var parent = items.map(function (_, i) { return i; });
-    function find(i) { return parent[i] === i ? i : (parent[i] = find(parent[i])); }
-    function union(a, b) { var ra = find(a), rb = find(b); if (ra !== rb) parent[rb] = ra; }
-
-    for (var i = 0; i < items.length; i++) {
-      for (var j = i + 1; j < items.length; j++) {
-        var dx = items[i].pt.x - items[j].pt.x;
-        var dy = items[i].pt.y - items[j].pt.y;
-        if (Math.sqrt(dx * dx + dy * dy) <= CLUSTER) union(i, j);
-      }
-    }
-
+    // 按目标节点分组：边 id 形如 L_A_F_0 / L-B-C-1，倒数第二段是目标节点
     var groups = new Map();
-    items.forEach(function (it, idx) {
-      var k = find(idx);
-      if (!groups.has(k)) groups.set(k, []);
-      groups.get(k).push(it);
+    paths.forEach(function (p, i) {
+      var id = p.id || '';
+      // 边 id 带渲染前缀，如 q1-L_A_F_0 / mermaid-1-L-A-F-0
+      var m = id.match(/L[-_]([^-_]+)[-_]([^-_]+)[-_]\d+$/);
+      var key = m ? 'to:' + m[2] : 'solo:' + i;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(p);
     });
 
     groups.forEach(function (group) {
       if (group.length < 2) return;
-      var sx = 0, sy = 0;
-      group.forEach(function (it) { sx += it.pt.x; sy += it.pt.y; });
-      sx /= group.length;
-      sy /= group.length;
-      group.forEach(function (it, idx) {
-        snapTail(it.p, sx, sy);
-        if (idx > 0) it.p.removeAttribute('marker-end');
+
+      var sample = tailPoints(group[0].getAttribute('d') || '');
+      if (sample.length < 2) return;
+      var vertical = Math.abs(sample[1].x - sample[0].x) < 0.5; // TD 型：末段竖直
+
+      // 锚点取终点坐标的中位数，落在哪条轴上就对齐哪条
+      var coords = [];
+      group.forEach(function (p) {
+        var t = tailPoints(p.getAttribute('d') || '');
+        if (t.length === 2) coords.push(vertical ? t[1].x : t[1].y);
+      });
+      if (!coords.length) return;
+      coords.sort(function (a, b) { return a - b; });
+      var anchor = coords[Math.floor(coords.length / 2)];
+
+      group.forEach(function (p, idx) {
+        var d = p.getAttribute('d') || '';
+        var t = tailPoints(d);
+        if (t.length < 2) return;
+        var corner = { x: t[0].x, y: t[0].y };
+        var end = { x: t[1].x, y: t[1].y };
+
+        if (vertical) {
+          corner.x = anchor;
+          end.x = anchor;
+        } else {
+          corner.y = anchor;
+          end.y = anchor;
+        }
+        // 先改终点、再改角点（每次都重新解析，避免 index 位移）
+        d = setPair(d, 1, end);
+        d = setPair(d, 2, corner);
+        p.setAttribute('d', d);
+
+        if (idx > 0) p.removeAttribute('marker-end'); // 只保留一个箭头
       });
     });
 
     return root;
   }
 
-  // svg 字符串 → 临时挂到文档里（getBBox 需要布局）→ 修 → 序列化回去
-  function fixString(svg) {
-    var doc;
-    try {
-      doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
-    } catch (e) {
-      return svg;
+  function scan(node) {
+    if (!node || node.nodeType !== 1) return;
+    if (node.tagName && node.tagName.toLowerCase() === 'svg') fix(node);
+    if (node.querySelectorAll) {
+      Array.prototype.forEach.call(node.querySelectorAll('svg'), function (s) { fix(s); });
     }
-    var root = doc && doc.documentElement;
-    if (!root || root.nodeName === 'parsererror') return svg;
-
-    var host = document.createElement('div');
-    host.setAttribute('aria-hidden', 'true');
-    host.style.cssText = 'position:absolute;left:-99999px;top:0;width:0;height:0;overflow:hidden;';
-    document.body.appendChild(host);
-    var live = document.importNode(root, true);
-    host.appendChild(live);
-    try {
-      fix(live);
-    } catch (e) {
-      host.remove();
-      return svg;
-    }
-    var out = new XMLSerializer().serializeToString(live);
-    host.remove();
-    return out;
-  }
-
-  function install() {
-    if (typeof window === 'undefined' || !window.mermaid || !window.mermaid.render) return false;
-    if (window.mermaid.__mrArrowHooked) return true;
-
-    var orig = window.mermaid.render.bind(window.mermaid);
-    window.mermaid.render = function () {
-      return orig.apply(null, arguments).then(function (res) {
-        if (res && typeof res.svg === 'string') {
-          try { res.svg = fixString(res.svg); } catch (e) { /* 保守降级 */ }
-        }
-        return res;
-      });
-    };
-    window.mermaid.__mrArrowHooked = true;
-    return true;
   }
 
   window.mermaidRoundedFixArrows = fix;
 
-  if (!install()) {
-    var tries = 0;
-    var t = setInterval(function () {
-      if (install() || ++tries > 250) clearInterval(t);
-    }, 20);
+  if (typeof MutationObserver !== 'undefined' && document.body) {
+    var obs = new MutationObserver(function (muts) {
+      for (var i = 0; i < muts.length; i++) {
+        var added = muts[i].addedNodes;
+        for (var j = 0; j < added.length; j++) scan(added[j]);
+      }
+    });
+    obs.observe(document.body, { childList: true, subtree: true });
+    Array.prototype.forEach.call(document.querySelectorAll('svg[id^="mermaid"]'), fix);
   }
 })();

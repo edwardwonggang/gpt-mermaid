@@ -80,3 +80,19 @@ node scripts/verify.mjs
 
 补丁脚本与示例：MIT。
 `vendor/mermaid-12.3.0.js` 与 `dist/*` 是 mermaid 的衍生物，遵循 mermaid 自身的 MIT 许可。
+
+## 汇合边合并成一根（dist/mermaid-rounded.arrows.js）
+
+多条边汇入同一节点时，mermaid 会给每条边各画一个箭头，并排挤在节点上方。
+本脚本在渲染后**把线也合并**：按目标节点分组，把各条边的「角点 + 终点」一起搬到同一条
+轴线上（TD 改 x、LR 改 y），横段延长、竖段重合，自然形成一根干线，只保留一个箭头。
+拐角保持直角，不产生斜线，也不改 marker 方向。
+
+> 早期版本只挪终点、不挪角点，会把直角折线拽成斜线、把箭头带歪；还对 svg 字符串做了
+> DOMParser→XMLSerializer 往返，foreignObject 里的 XHTML 闭合标签被破坏，整张图解析报错。
+> 现在的实现只在活 DOM 上改 `d` 的最后两对坐标，不序列化整段 svg。
+
+```html
+<script src="dist/mermaid.rounded.min.js"></script>
+<script src="dist/mermaid-rounded.arrows.js"></script>
+```
