@@ -96,18 +96,7 @@ const STYLE_HELPER = `  // ===== mermaid-rounded: 节点外观参数（唯一入
     };
   }
   // ===== end mermaid-rounded =====
-  // 头部就把自适应 CSS 挂到文档上：mermaid 先在离屏容器里量一遍尺寸，
-  // 那一遍如果拿不到规则，会把 label 宽 120 记进 node.width，后面很难再改回来。
-  try {
-    if (typeof document !== "undefined" && document.head && !document.getElementById("mermaid-rounded-style")) {
-      var __mrCss = "foreignObject > div{display:inline-block !important;width:auto !important;" +
-        "max-width:200px !important;white-space:pre-wrap !important;}";
-      var __mrStyleEl = document.createElement("style");
-      __mrStyleEl.id = "mermaid-rounded-style";
-      __mrStyleEl.textContent = __mrCss;
-      document.head.appendChild(__mrStyleEl);
-    }
-  } catch (e) { /* 非浏览器环境忽略 */ }
+  // 说明：自适应不再依赖注入 CSS，见下面的「label div 创建即收缩」补丁。
 ${ANCHOR_DRAWRECT}`;
 
 js = replaceOnce(js, '注入 __mrStyle', ANCHOR_DRAWRECT, STYLE_HELPER);
@@ -125,12 +114,27 @@ js = replaceOnce(
     // 直接量内层文字（.nodeLabel）的真实宽度作为基准，文字没有时才退回 bbox。
     const __rootEl = shapeSvg.node();
     const __divEl = __rootEl.querySelector("foreignObject div");
-    const __labelEl = __rootEl.querySelector(".nodeLabel");
-    const __divW = __divEl ? __divEl.getBoundingClientRect().width : 0;
-    const __textW = __labelEl ? __labelEl.getBoundingClientRect().width : 0;
-    const __basisW = __divW > 1 ? __divW : (__textW > 1 ? __textW : bbox.width);
-    // node.width 若是测量残留（= wrappingWidth），按未设置处理
-    const __wrapW = getConfig2()?.flowchart?.wrappingWidth ?? 200;
+    // 直接拿 node.label 文本 + 当前字体，离屏量一次真宽。
+    // 不依赖 div / foreignObject 的布局（它们在 mermaid 里会被 max-width 拉满，量不准）。
+    const __textOf = (n) => (typeof n.label === "string" ? n.label : "").replace(/<[^>]*>/g, "").trim();
+    const __measureText = (txt, styleFrom) => {
+      if (!txt || !styleFrom) return 0;
+      const cs = getComputedStyle(styleFrom);
+      const probe = document.createElement("span");
+      probe.textContent = txt;
+      probe.style.cssText = "position:absolute;left:-99999px;top:0;visibility:hidden;" +
+        "display:inline-block;white-space:nowrap;";
+      probe.style.fontFamily = cs.fontFamily;
+      probe.style.fontSize = cs.fontSize;
+      probe.style.fontWeight = cs.fontWeight;
+      probe.style.letterSpacing = cs.letterSpacing;
+      document.body.appendChild(probe);
+      const w = probe.getBoundingClientRect().width;
+      probe.remove();
+      return w;
+    };
+    const __tw = __measureText(__textOf(node2), __divEl || __rootEl);
+    const __basisW = __tw > 1 ? __tw : bbox.width;
     const __nodeW = node2 && typeof node2.width === "number" && Math.abs(node2.width - __wrapW) > 0.5
       ? node2.width
       : 0;
@@ -205,60 +209,51 @@ js = replaceOnce(
 );
 
 // ---------------------------------------------------------------------------
-// 5. 标签宽度：上游 label div 是 display:table + max-width:wrappingWidth(默认120)，
-//    block/table 会把 div 拉满到 120px —— 「提」和「提交申请」都变成 152px 的方框。
-//    这才是「两个字也显示得非常长」的真凶（跟内边距无关）。
-//
-//    做法：往 SVG 里注入一条 !important 规则，强制 div 收缩到内容宽度。
-//    用 CSS 的 !important 覆盖上游写死的 inline width，避免去追那串赋值链。
-//    —— 这条规则其实也可以单独当 CSS 用，不依赖本补丁。
+// 5. 标签宽度：根因在 label div 的初始 display
+//    上游把 div 设成 `display: table-cell` + `max-width: wrappingWidth(120)`，
+//    table-cell 会先被拉满到 120 再量，于是：
+//      bbox.width = 120 → foreignObject 写死 120 → label translate(-60) 写死
+//      → 方框宽度恒为 152，且状态图里文字相对方框左移（错位）。
+//    这里改成创建时就 `inline-block`：会收缩到文字宽度，量出来就是真实宽度，
+//    foreignObject / translate / node.width 三者一次对齐。
+//    长文本仍会撞上 max-width，落到下面的 `bbox.width === width3` 分支折行。
 // ---------------------------------------------------------------------------
 js = replaceOnce(
   js,
-  '注入标签自适应 CSS',
-  `    const fo = element3.append("foreignObject");`,
-  `    const fo = element3.append("foreignObject");
-    // ===== mermaid-rounded: 让 label 收缩到文字宽度 =====
-    {
-      const __root = element3.node().ownerSVGElement || element3.node();
-      if (__root && !__root.querySelector("style[data-mermaid-rounded]")) {
-        const __css = "foreignObject > div{display:inline-block !important;width:auto !important;" +
-          "max-width:200px !important;white-space:pre-wrap !important;}";
-        const __st = document.createElementNS("http://www.w3.org/2000/svg", "style");
-        __st.setAttribute("data-mermaid-rounded", "1");
-        __st.textContent = __css;
-        __root.appendChild(__st);
-        // 还要挂一份到文档上：mermaid 在正式渲染前会先在离屏容器里量一遍尺寸，
-        // 那一遍拿不到 SVG 内的 style，会把 label 宽 120 记为 node.width，
-        // 后面 Math.max(bbox, node.width) 又会把宽度顶回 152。
-        try {
-          if (typeof document !== "undefined" && document.head && !document.getElementById("mermaid-rounded-style")) {
-            const __st2 = document.createElement("style");
-            __st2.id = "mermaid-rounded-style";
-            __st2.textContent = __css;
-            document.head.appendChild(__st2);
-          }
-        } catch (e) { /* 非浏览器环境忽略 */ }
+  'label div 创建即收缩',
+  `    div.style("display", "table-cell");
+    div.style("white-space", "nowrap");
+    div.style("line-height", "1.5");`,
+  `    // ===== mermaid-rounded: 量真实文字宽度并锁定 =====
+    // 光改 display 没用：foreignObject 有 1200px 宽，shrink-to-fit 会直接吃到
+    // max-width(120)，量出来还是 120。用 Range 直接量文本节点，才是真宽度。
+    div.style("display", "table-cell");
+    div.style("white-space", "nowrap");
+    div.style("line-height", "1.5");
+    try {
+      // span 里通常是 <p> 块级元素，Range / getBoundingClientRect 量到的都是块宽(120)。
+      // 用一个离屏探针按同样字体量纯文本宽度，才是真实字宽。
+      const __node = span.node();
+      const __text = (__node.textContent || "").trim();
+      if (__text && width3 !== Number.POSITIVE_INFINITY) {
+        const __cs = getComputedStyle(__node);
+        const __probe = document.createElement("span");
+        __probe.textContent = __text;
+        __probe.style.cssText = "position:absolute;left:-99999px;top:0;visibility:hidden;" +
+          "white-space:nowrap;display:inline-block;";
+        __probe.style.fontFamily = __cs.fontFamily;
+        __probe.style.fontSize = __cs.fontSize;
+        __probe.style.fontWeight = __cs.fontWeight;
+        __probe.style.letterSpacing = __cs.letterSpacing;
+        document.body.appendChild(__probe);
+        const __tw = __probe.getBoundingClientRect().width;
+        __probe.remove();
+        if (__tw > 0 && __tw < width3 - 1) {
+          div.style("display", "table");
+          div.style("width", Math.ceil(__tw + 2) + "px");
+        }
       }
-    }
-    // ===== end mermaid-rounded =====`
-);
-
-// ---------------------------------------------------------------------------
-// 5b. 收紧 foreignObject 外壳：上游把它设成 10×wrappingWidth（默认 1200px，截断后 120），
-//     即使里面的 div 已经收缩到 26px，外壳仍是 120px —— 于是 g.getBBox() 恒为 120，
-//     节点看起来"被撑宽"，其它按 bbox 取尺寸的地方也会跟着算错。
-// ---------------------------------------------------------------------------
-js = replaceOnce(
-  js,
-  '收紧 foreignObject 外壳',
-  `    const bbox = await fastdom_default2.measure(() => div.node().getBoundingClientRect());
-    if (bbox.width === width3) {`,
-  `    const bbox = await fastdom_default2.measure(() => div.node().getBoundingClientRect());
-    // ===== mermaid-rounded =====
-    fo.attr("width", bbox.width + "px").attr("height", bbox.height + "px");
-    // ===== end mermaid-rounded =====
-    if (bbox.width === width3) {`
+    } catch (e) { /* 老浏览器忽略 */ }`
 );
 
 // ---------------------------------------------------------------------------
@@ -294,6 +289,17 @@ js = replaceOnce(
   '状态图圆角统一为 radius',
   `      rx: node2.look === "neo" ? 3 : 5,`,
   `      rx: __mrStyle(node2).radius,`
+);
+
+js = replaceOnce(
+  js,
+  'label 无条件居中',
+  `    div.attr("xmlns", "http://www.w3.org/1999/xhtml");`,
+  `    // ===== mermaid-rounded: 无条件居中 =====
+    // 方框按文字收缩后（如 55px），label div 仍是 120px 宽；不居中文字会贴左边，
+    // 表现就是「状态图文字错位」。
+    div.style("text-align", "center");
+    div.attr("xmlns", "http://www.w3.org/1999/xhtml");`
 );
 
 // ---------------------------------------------------------------------------
