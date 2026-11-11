@@ -1,0 +1,8 @@
+# 官方原始 bundle：脚本会自动从 npm 下载，不入库（13MB）
+vendor/
+
+# 未压缩产物可随时用 --no-minify 重新生成
+dist/mermaid.rounded.js
+
+node_modules/
+.DS_Store
