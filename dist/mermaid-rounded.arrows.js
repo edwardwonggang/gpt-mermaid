@@ -187,6 +187,25 @@
 
       var anchor = vertical ? box.x + box.width / 2 : box.y + box.height / 2;
 
+      // 出口段也要留白：源节点贴着母线时，线会「一出来就拐弯」。
+      // 规则：优先保证「母线上方/下方 LEAD」；若那样会让某条出口线短于 MIN_EXIT，
+      // 就把母线挪到「最靠近目标的那个源出口」与「目标入口」的中间。
+      var MIN_EXIT = (cfg.minExit == null ? 18 : cfg.minExit);
+      var nearStart = null;
+      g.items.forEach(function (it) {
+        var v = vertical ? it.start.y : it.start.x;
+        if (nearStart === null) { nearStart = v; return; }
+        nearStart = vertical
+          ? (g.side === 'top' ? Math.max(nearStart, v) : Math.min(nearStart, v))
+          : (g.side === 'left' ? Math.max(nearStart, v) : Math.min(nearStart, v));
+      });
+      if (nearStart !== null) {
+        var stub = vertical ? Math.abs(bus - nearStart) : Math.abs(bus - nearStart);
+        if (stub < MIN_EXIT) {
+          bus = (nearStart + entry) / 2;
+        }
+      }
+
       g.items.forEach(function (it, idx) {
         var sx = it.start.x, sy = it.start.y;
         var d;
