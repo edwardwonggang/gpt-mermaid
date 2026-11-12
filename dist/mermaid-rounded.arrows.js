@@ -125,6 +125,23 @@
     } catch (e) { return 4; }
   }
 
+  function ptAt(path, atEnd) {
+    try {
+      var L = path.getTotalLength();
+      return path.getPointAtLength(atEnd ? L : 0);
+    } catch (e) { return null; }
+  }
+
+  // 终点落在目标框的哪一侧
+  function sideOf(pt, box) {
+    var dT = Math.abs(pt.y - box.y);
+    var dB = Math.abs(pt.y - (box.y + box.height));
+    var dL = Math.abs(pt.x - box.x);
+    var dR = Math.abs(pt.x - (box.x + box.width));
+    var m = Math.min(dT, dB, dL, dR);
+    return m === dT ? 'top' : m === dB ? 'bottom' : m === dL ? 'left' : 'right';
+  }
+
   function fix(root) {
     if (!cfg.enabled) return root;
     if (!root || !root.querySelectorAll) return root;
@@ -134,77 +151,63 @@
     var paths = Array.prototype.slice.call(svg.querySelectorAll('path[marker-end]'));
     if (paths.length < 2) return root;
 
-    // 分组：边 id = <render>-L_<源>_<目标>_<序号>
+    var arrowH = arrowHeight(svg, paths[0]);
+    var LEAD = (cfg.lead == null ? Math.max(12, Math.round(arrowH * 4)) : cfg.lead);
+
+    // 先按「目标节点 + 进入侧」分组
     var groups = new Map();
     paths.forEach(function (p, i) {
       var m = (p.id || '').match(/L[-_]([^-_]+)[-_]([^-_]+)[-_]\d+$/);
       if (!m) return;
-      var key = m[2];
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push({ path: p, from: m[1] });
+      var target = m[2];
+      var box = boxOf(svg, target);
+      if (!box) return;
+      var end = ptAt(p, true);
+      var start = ptAt(p, false);
+      if (!end || !start) return;
+      var side = sideOf(end, box);
+      var key = target + ':' + side;
+      if (!groups.has(key)) groups.set(key, { target: target, box: box, side: side, items: [] });
+      groups.get(key).items.push({ path: p, start: start });
     });
 
-    // 引导段长度 = 箭头高度 × 4（保证箭头不压在母线上）
-    // 注意：这行在 fix 作用域，不能引用 forEach 的 group
-    var arrowH = arrowHeight(svg, paths[0]);
-    var LEAD = (cfg.lead == null ? Math.max(12, Math.round(arrowH * 4)) : cfg.lead);
+    groups.forEach(function (g) {
+      if (g.items.length < 2) return;
+      var box = g.box;
+      var vertical = g.side === 'top' || g.side === 'bottom';
+      var entry, bus;
 
-    groups.forEach(function (group, target) {
-      if (group.length < 2) return;
-      var tbox = boxOf(svg, target);
-      if (!tbox) return;
-
-      var items = [];
-      for (var i = 0; i < group.length; i++) {
-        var sb = boxOf(svg, group[i].from);
-        if (!sb) return;                      // 有源节点找不到就整组跳过，避免半改
-        items.push({
-          path: group[i].path,
-          sx: sb.x + sb.width / 2,
-          sy: sb.y + sb.height / 2,
-          sb: sb
-        });
+      if (vertical) {
+        entry = g.side === 'top' ? box.y : box.y + box.height;
+        bus = entry + (g.side === 'top' ? -LEAD : LEAD);
+      } else {
+        entry = g.side === 'left' ? box.x : box.x + box.width;
+        bus = entry + (g.side === 'left' ? -LEAD : LEAD);
       }
 
-      var tcx = tbox.x + tbox.width / 2;
-      var tcy = tbox.y + tbox.height / 2;
+      var anchor = vertical ? box.x + box.width / 2 : box.y + box.height / 2;
 
-      // 用「目标框中心 → 各源框中心」的平均位移判断主方向
-      var dx = 0, dy = 0;
-      items.forEach(function (it) {
-        dx += it.sx - tcx;
-        dy += it.sy - tcy;
-      });
-      var vertical = Math.abs(dy) >= Math.abs(dx);
-
-      items.forEach(function (it, idx) {
+      g.items.forEach(function (it, idx) {
+        var sx = it.start.x, sy = it.start.y;
         var d;
         if (vertical) {
-          var fromTop = it.sy < tcy;
-          var startY = fromTop ? it.sb.y + it.sb.height : it.sb.y;
-          var entryY = fromTop ? tbox.y : tbox.y + tbox.height;
-          var busY = entryY + (fromTop ? -LEAD : LEAD);
-          // 源中心 → 竖直下到母线 → 横移到目标中线 → 一小段竖直进节点
-          d = 'M' + it.sx + ',' + startY +
-              'L' + it.sx + ',' + busY +
-              'L' + tcx + ',' + busY +
-              'L' + tcx + ',' + entryY;
+          // 从原出口点竖直走到母线 → 横移到目标中线 → 竖直进节点（引导段）
+          d = 'M' + sx + ',' + sy +
+              'L' + sx + ',' + bus +
+              'L' + anchor + ',' + bus +
+              'L' + anchor + ',' + entry;
         } else {
-          var fromLeft = it.sx < tcx;
-          var startX = fromLeft ? it.sb.x + it.sb.width : it.sb.x;
-          var entryX = fromLeft ? tbox.x : tbox.x + tbox.width;
-          var busX = entryX + (fromLeft ? -LEAD : LEAD);
-          d = 'M' + startX + ',' + it.sy +
-              'L' + busX + ',' + it.sy +
-              'L' + busX + ',' + tcy +
-              'L' + entryX + ',' + tcy;
+          d = 'M' + sx + ',' + sy +
+              'L' + bus + ',' + sy +
+              'L' + bus + ',' + anchor +
+              'L' + entry + ',' + anchor;
         }
         it.path.setAttribute('d', d);
-        if (idx > 0) it.path.removeAttribute('marker-end'); // 只留一个箭头
+        if (idx > 0) it.path.removeAttribute('marker-end');
       });
     });
 
-    // 所有连线统一做圆弧倒角（含刚合并出来的三段折线）
+    // 所有连线统一做圆弧倒角（含刚合并出来的折线）
     var RADIUS = (cfg.radius == null ? 8 : cfg.radius);
     Array.prototype.forEach.call(svg.querySelectorAll('path.flowchart-link'), function (p) {
       var d = p.getAttribute('d');
