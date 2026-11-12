@@ -97,6 +97,21 @@ node scripts/verify.mjs
 <script src="dist/mermaid-rounded.arrows.js"></script>
 ```
 
+可调参数：
+
+```js
+window.__MR_ARROWS = {
+  enabled: true,
+  radius: 8,     // 直角拐点的圆弧倒角半径（px）
+  lead: null     // 汇合后引导段长度；null = 自动取「箭头高度 × 4」
+};
+```
+
+- **圆弧倒角**：把所有纯 `M/L` 折线的直角拐点替换成 `Q` 曲线（`roundPath()`），
+  已含 `Q/C/A` 的路径原样保留，避免二次变形。实测渲染后路径里带 `Q`。
+- **引导段**：默认 `箭头高度 × 4`（实测箭头 10px → 引导段 40px，含倒角后视觉约 48px），
+  保证箭头不会压在母线上。
+
 ## 配色主题 + 子图圆角（dist/mermaid-rounded.themes.js）
 
 ```js

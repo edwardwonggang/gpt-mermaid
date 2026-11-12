@@ -82,6 +82,49 @@
     return null;
   }
 
+  // 直角拐点做圆弧倒角：把每个 L 拐角替换成 折线→Q 圆角→折线
+  // 只处理纯 M/L 折线；已含 Q/C/A 的路径交给 mermaid 自己（避免二次变形）
+  function roundPath(d, r) {
+    if (!d || /[QCASZ]/i.test(d)) return d;
+    var nums = d.match(/-?\d*\.?\d+/g);
+    if (!nums || nums.length < 6) return d; // 至少 3 个点才有拐角
+    var pts = [];
+    for (var i = 0; i + 1 < nums.length; i += 2) pts.push({ x: +nums[i], y: +nums[i + 1] });
+
+    var out = 'M' + pts[0].x + ',' + pts[0].y;
+    for (var k = 1; k < pts.length - 1; k++) {
+      var p0 = pts[k - 1], p1 = pts[k], p2 = pts[k + 1];
+      var v1x = p1.x - p0.x, v1y = p1.y - p0.y;
+      var v2x = p2.x - p1.x, v2y = p2.y - p1.y;
+      var l1 = Math.sqrt(v1x * v1x + v1y * v1y);
+      var l2 = Math.sqrt(v2x * v2x + v2y * v2y);
+      if (!l1 || !l2) { out += 'L' + p1.x + ',' + p1.y; continue; }
+      var cross = v1x * v2y - v1y * v2x;
+      if (Math.abs(cross) < 1e-9) { out += 'L' + p1.x + ',' + p1.y; continue; } // 共线
+      var rr = Math.min(r, l1 / 2, l2 / 2);
+      var ax = p1.x - (v1x / l1) * rr, ay = p1.y - (v1y / l1) * rr;
+      var bx = p1.x + (v2x / l2) * rr, by = p1.y + (v2y / l2) * rr;
+      out += 'L' + ax + ',' + ay + 'Q' + p1.x + ',' + p1.y + ' ' + bx + ',' + by;
+    }
+    var last = pts[pts.length - 1];
+    out += 'L' + last.x + ',' + last.y;
+    return out;
+  }
+
+  // 取箭头高度（px）：读 marker-end 指向的 marker 里箭头路径的 bbox
+  function arrowHeight(svg, path) {
+    try {
+      var m = (path.getAttribute('marker-end') || '').match(/url\(#(.+?)\)/);
+      if (!m) return 4;
+      var mk = svg.querySelector('marker#' + m[1]) || document.getElementById(m[1]);
+      if (!mk) return 4;
+      var p = mk.querySelector('path');
+      if (p) { var bb = p.getBBox(); if (bb.height > 0.5) return bb.height; }
+      var h = parseFloat(mk.getAttribute('markerHeight') || '0');
+      return h > 0 ? h : 4;
+    } catch (e) { return 4; }
+  }
+
   function fix(root) {
     if (!cfg.enabled) return root;
     if (!root || !root.querySelectorAll) return root;
@@ -101,7 +144,10 @@
       groups.get(key).push({ path: p, from: m[1] });
     });
 
-    var LEAD = (cfg.lead == null ? 16 : cfg.lead);
+    // 引导段长度 = 箭头高度 × 4（保证箭头不压在母线上）
+    // 注意：这行在 fix 作用域，不能引用 forEach 的 group
+    var arrowH = arrowHeight(svg, paths[0]);
+    var LEAD = (cfg.lead == null ? Math.max(12, Math.round(arrowH * 4)) : cfg.lead);
 
     groups.forEach(function (group, target) {
       if (group.length < 2) return;
@@ -156,6 +202,13 @@
         it.path.setAttribute('d', d);
         if (idx > 0) it.path.removeAttribute('marker-end'); // 只留一个箭头
       });
+    });
+
+    // 所有连线统一做圆弧倒角（含刚合并出来的三段折线）
+    var RADIUS = (cfg.radius == null ? 8 : cfg.radius);
+    Array.prototype.forEach.call(svg.querySelectorAll('path.flowchart-link'), function (p) {
+      var d = p.getAttribute('d');
+      if (d) p.setAttribute('d', roundPath(d, RADIUS));
     });
 
     return root;
