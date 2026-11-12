@@ -31,7 +31,7 @@
  */
 (function () {
   var cfg = (window.__MR_ARROWS = window.__MR_ARROWS || {});
-  if (cfg.enabled == null) cfg.enabled = false; // 默认关闭：见文件头「已知问题」
+  if (cfg.enabled == null) cfg.enabled = true;
 
   // 把 d 里的数字全部取出来（含 index），坐标是成对出现的：
   // 最后 4 个数字 = 角点(x,y) + 终点(x,y)
@@ -61,8 +61,29 @@
     return d.slice(0, from) + p.x + ',' + p.y + d.slice(to);
   }
 
+  // 取节点框：节点 id 形如 <render>-flowchart-F-9
+  function boxOf(svg, name) {
+    var nodes = Array.prototype.slice.call(svg.querySelectorAll('g.node'));
+    var re = new RegExp('[-_]' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[-_]\\d+$');
+    for (var i = 0; i < nodes.length; i++) {
+      if (re.test(nodes[i].id || '')) {
+        try {
+          var el = nodes[i];
+          var bb = el.getBBox();
+          // g.node 的 getBBox() 是局部坐标，mermaid 把位置放在 translate 上，
+          // 必须补上平移量，否则算出来的坐标全在原点附近（连线会被画到画外）。
+          var t = el.transform && el.transform.baseVal && el.transform.baseVal.consolidate();
+          var tx = t ? t.matrix.e : 0;
+          var ty = t ? t.matrix.f : 0;
+          return { x: bb.x + tx, y: bb.y + ty, width: bb.width, height: bb.height };
+        } catch (e) { return null; }
+      }
+    }
+    return null;
+  }
+
   function fix(root) {
-    if (!cfg.enabled) return root; // 需要显式开启
+    if (!cfg.enabled) return root;
     if (!root || !root.querySelectorAll) return root;
     var svg = root.tagName && root.tagName.toLowerCase() === 'svg' ? root : root.querySelector('svg');
     if (!svg) return root;
@@ -70,78 +91,70 @@
     var paths = Array.prototype.slice.call(svg.querySelectorAll('path[marker-end]'));
     if (paths.length < 2) return root;
 
-    // 按目标节点分组：边 id 形如 <render>-L_A_F_0，倒数第二段是目标节点
+    // 分组：边 id = <render>-L_<源>_<目标>_<序号>
     var groups = new Map();
     paths.forEach(function (p, i) {
-      var id = p.id || '';
-      var m = id.match(/L[-_]([^-_]+)[-_]([^-_]+)[-_]\d+$/);
-      var key = m ? m[2] : 'solo:' + i;
+      var m = (p.id || '').match(/L[-_]([^-_]+)[-_]([^-_]+)[-_]\d+$/);
+      if (!m) return;
+      var key = m[2];
       if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(p);
+      groups.get(key).push({ path: p, from: m[1] });
     });
 
     var LEAD = (cfg.lead == null ? 16 : cfg.lead);
 
-    function findNodeBox(to) {
-      var nodes = Array.prototype.slice.call(svg.querySelectorAll('g.node'));
-      for (var i = 0; i < nodes.length; i++) {
-        var id = nodes[i].id || '';
-        // 节点 id 形如 <render>-flowchart-F-9
-        if (new RegExp('[-_]' + to.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[-_]\\d+$').test(id)) {
-          try { return nodes[i].getBBox(); } catch (e) { return null; }
-        }
-      }
-      return null;
-    }
-
-    groups.forEach(function (group, key) {
+    groups.forEach(function (group, target) {
       if (group.length < 2) return;
+      var tbox = boxOf(svg, target);
+      if (!tbox) return;
 
-      // 用第一条边判断朝向：看它的起点更靠上/下（TD）还是更靠左/右（LR）
-      var first = group[0];
-      var box = findNodeBox(key);
-      if (!box) return;
-
-      // 取所有边的起点，判断是纵向汇入还是横向汇入
-      var starts = group.map(function (p) {
-        try { var pt = p.getPointAtLength(0); return { x: pt.x, y: pt.y }; } catch (e) { return null; }
-      });
-      if (starts.some(function (s) { return !s; })) return;
-
-      // 目标框中心；纵向时用 x，横向时用 y
-      var cx = box.x + box.width / 2;
-      var cy = box.y + box.height / 2;
-      // 起点在节点的上下两侧 → 纵向汇入；在左右两侧 → 横向汇入
-      var vertical = starts[0].y < box.y || starts[0].y > box.y + box.height;
-
-      var anchor, entry, join;
-      if (vertical) {
-        anchor = cx;
-        entry = starts[0].y < box.y ? box.y : box.y + box.height; // 从哪边进
-        join = entry + (starts[0].y < box.y ? -LEAD : LEAD);
-      } else {
-        anchor = cy;
-        entry = box.x;
-        join = entry - LEAD;
+      var items = [];
+      for (var i = 0; i < group.length; i++) {
+        var sb = boxOf(svg, group[i].from);
+        if (!sb) return;                      // 有源节点找不到就整组跳过，避免半改
+        items.push({
+          path: group[i].path,
+          sx: sb.x + sb.width / 2,
+          sy: sb.y + sb.height / 2,
+          sb: sb
+        });
       }
 
-      group.forEach(function (p, idx) {
-        var s0 = starts[idx];
+      var tcx = tbox.x + tbox.width / 2;
+      var tcy = tbox.y + tbox.height / 2;
+
+      // 用「目标框中心 → 各源框中心」的平均位移判断主方向
+      var dx = 0, dy = 0;
+      items.forEach(function (it) {
+        dx += it.sx - tcx;
+        dy += it.sy - tcy;
+      });
+      var vertical = Math.abs(dy) >= Math.abs(dx);
+
+      items.forEach(function (it, idx) {
         var d;
         if (vertical) {
-          // 起点 → 竖直下到母线 → 横移到锚点 → 竖直进节点（引导段）
-          d = 'M' + s0.x + ',' + s0.y +
-              'L' + s0.x + ',' + join +
-              'L' + anchor + ',' + join +
-              'L' + anchor + ',' + entry;
+          var fromTop = it.sy < tcy;
+          var startY = fromTop ? it.sb.y + it.sb.height : it.sb.y;
+          var entryY = fromTop ? tbox.y : tbox.y + tbox.height;
+          var busY = entryY + (fromTop ? -LEAD : LEAD);
+          // 源中心 → 竖直下到母线 → 横移到目标中线 → 一小段竖直进节点
+          d = 'M' + it.sx + ',' + startY +
+              'L' + it.sx + ',' + busY +
+              'L' + tcx + ',' + busY +
+              'L' + tcx + ',' + entryY;
         } else {
-          d = 'M' + s0.x + ',' + s0.y +
-              'L' + join + ',' + s0.y +
-              'L' + join + ',' + anchor +
-              'L' + entry + ',' + anchor;
+          var fromLeft = it.sx < tcx;
+          var startX = fromLeft ? it.sb.x + it.sb.width : it.sb.x;
+          var entryX = fromLeft ? tbox.x : tbox.x + tbox.width;
+          var busX = entryX + (fromLeft ? -LEAD : LEAD);
+          d = 'M' + startX + ',' + it.sy +
+              'L' + busX + ',' + it.sy +
+              'L' + busX + ',' + tcy +
+              'L' + entryX + ',' + tcy;
         }
-        p.setAttribute('d', d);
-        if (idx > 0) p.removeAttribute('marker-end');
+        it.path.setAttribute('d', d);
+        if (idx > 0) it.path.removeAttribute('marker-end'); // 只留一个箭头
       });
     });
 
