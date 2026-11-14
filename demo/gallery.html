@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>mermaid-rounded · 渲染画廊</title>
+<title>gpt-mermaid · 渲染画廊</title>
 <style>
   :root{--bg:#f7f8fa;--card:#fff;--line:#e6e8ec;--ink:#1c1f23;--ink2:#5a626e;--ink3:#8b939f;
     --accent:#2f6df6;--code:#f3f4f7}
@@ -40,15 +40,15 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>mermaid-rounded 渲染画廊</h1>
+  <h1>gpt-mermaid 渲染画廊</h1>
   <div class="sub">判定框=圆角矩形 · 方框宽度随文字 · 子图容器圆角 · 多套配色（<code>demo/gallery.html</code>）</div>
   <div class="bar" id="bar"><span>配色</span></div>
   <div class="grid" id="grid"></div>
 </div>
 
-<script src="../dist/mermaid.rounded.min.js"></script>
-<script src="../dist/mermaid-rounded.arrows.js"></script>
-<script src="../dist/mermaid-rounded.themes.js"></script>
+<script src="../dist/gpt-mermaid.runtime.min.js"></script>
+<script src="../dist/gpt-mermaid.arrows.js"></script>
+<script src="../dist/gpt-mermaid.themes.js"></script>
 <script>
 const CASES = [
   { id:'basic', tag:'基本', title:'三步直线', note:'宽度随文字',
@@ -133,9 +133,9 @@ CASES.forEach(function (c) {
 });
 
 async function renderAll() {
-  const cfg = MermaidRounded.config(themeName);
+  const cfg = GPTMermaidThemes.config(themeName);
   mermaid.initialize(Object.assign({ startOnLoad: false }, cfg));
-  const dark = MermaidRounded.isDark();
+  const dark = GPTMermaidThemes.isDark();
   document.querySelectorAll('.card').forEach(function (el) {
     el.classList.toggle('dark', dark);
   });
@@ -151,13 +151,13 @@ async function renderAll() {
   window.__done = true;
 }
 
-Object.keys(MermaidRounded.themes).forEach(function (key) {
+Object.keys(GPTMermaidThemes.themes).forEach(function (key) {
   const btn = document.createElement('button');
-  btn.textContent = MermaidRounded.themes[key].label;
+  btn.textContent = GPTMermaidThemes.themes[key].label;
   btn.dataset.theme = key;
   btn.onclick = function () {
     themeName = key;
-    MermaidRounded.useTheme(key);
+    GPTMermaidThemes.useTheme(key);
     document.querySelectorAll('.bar button').forEach(function (b) {
       b.classList.toggle('on', b.dataset.theme === key);
     });
@@ -167,7 +167,7 @@ Object.keys(MermaidRounded.themes).forEach(function (key) {
   bar.appendChild(btn);
 });
 
-MermaidRounded.useTheme(themeName);
+GPTMermaidThemes.useTheme(themeName);
 renderAll();
 </script>
 </body>

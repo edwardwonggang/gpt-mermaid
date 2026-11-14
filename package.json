@@ -1,0 +1,92 @@
+{
+  "name": "gpt-mermaid",
+  "version": "1.0.0",
+  "description": "ChatGPT-style Mermaid renderer with rounded nodes, self-sized decision boxes and a complete browser API.",
+  "type": "module",
+  "main": "./dist/gpt-mermaid.cjs",
+  "module": "./dist/gpt-mermaid.esm.js",
+  "unpkg": "./dist/gpt-mermaid.umd.js",
+  "jsdelivr": "./dist/gpt-mermaid.umd.js",
+  "style": "./dist/gpt-mermaid.css",
+  "types": "./types/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/gpt-mermaid.esm.js",
+      "require": "./dist/gpt-mermaid.cjs",
+      "default": "./dist/gpt-mermaid.umd.js"
+    },
+    "./css": "./dist/gpt-mermaid.css",
+    "./runtime": "./dist/gpt-mermaid.runtime.min.js",
+    "./themes": "./dist/gpt-mermaid.themes.js",
+    "./arrows": "./dist/gpt-mermaid.arrows.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/gpt-mermaid.cjs",
+    "dist/gpt-mermaid.css",
+    "dist/gpt-mermaid.esm.js",
+    "dist/gpt-mermaid.esm.min.js",
+    "dist/gpt-mermaid.min.js",
+    "dist/gpt-mermaid.umd.js",
+    "dist/gpt-mermaid.runtime.min.js",
+    "dist/gpt-mermaid.arrows.js",
+    "dist/gpt-mermaid.themes.js",
+    "dist/LICENSE",
+    "src",
+    "types",
+    "LICENSES",
+    "docs",
+    "demo/index.html",
+    "demo/preview.png",
+    "scripts/build.mjs",
+    "scripts/serve.mjs",
+    "scripts/apply-patch.mjs",
+    "scripts/verify.mjs",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "CODE_OF_CONDUCT.md"
+  ],
+  "sideEffects": [
+    "./dist/gpt-mermaid.css"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:runtime": "node scripts/apply-patch.mjs",
+    "check": "node --check dist/gpt-mermaid.umd.js && node --check dist/gpt-mermaid.esm.js && node --check dist/gpt-mermaid.cjs",
+    "serve": "node scripts/serve.mjs",
+    "test": "node --test test/unit.test.mjs",
+    "test:e2e": "node test/e2e.mjs",
+    "test:all": "npm run build && npm run check && npm test && npm run test:e2e"
+  },
+  "keywords": [
+    "mermaid",
+    "mermaid-diagram",
+    "chatgpt",
+    "elk",
+    "flowchart",
+    "diagram",
+    "svg",
+    "browser"
+  ],
+  "author": "edwardwonggang",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/edwardwonggang/gpt-mermaid.git"
+  },
+  "homepage": "https://github.com/edwardwonggang/gpt-mermaid#readme",
+  "bugs": {
+    "url": "https://github.com/edwardwonggang/gpt-mermaid/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.10",
+    "playwright": "1.62.1"
+  }
+}

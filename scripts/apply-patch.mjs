@@ -80,14 +80,14 @@ const originalBytes = js.length;
 // 0. 注入样式常量与取值函数（挂在全局，方便运行时不改包就能调参）
 // ---------------------------------------------------------------------------
 const ANCHOR_DRAWRECT = `  async function drawRect3(parent4, node2, options2) {`;
-const STYLE_HELPER = `  // ===== mermaid-rounded: 节点外观参数（唯一入口） =====
-  // 可以在页面里用 window.__MERMAID_ROUNDED = { radius, paddingX, paddingY, minWidth } 覆盖，
+const STYLE_HELPER = `  // ===== gpt-mermaid: 节点外观参数（唯一入口） =====
+  // 可以在页面里用 window.__GPT_MERMAID_ROUNDED = { radius, paddingX, paddingY, minWidth } 覆盖，
   // 不用重新打补丁。
-  var __MR_DEFAULTS = { radius: 8, paddingX: 12, paddingY: 10, minWidth: 48 };
+  var __GPTM_DEFAULTS = { radius: 8, paddingX: 12, paddingY: 10, minWidth: 48 };
   function __mrStyle(node) {
-    var o = (typeof window !== "undefined" && window.__MERMAID_ROUNDED) || {};
+    var o = (typeof window !== "undefined" && window.__GPT_MERMAID_ROUNDED) || {};
     var pick = function (v, d) { return v === undefined || v === null ? d : v; };
-    var d = __MR_DEFAULTS;
+    var d = __GPTM_DEFAULTS;
     return {
       radius: pick(node && node.rx, pick(o.radius, d.radius)),
       paddingX: pick(node && node.labelPaddingX, pick(o.paddingX, d.paddingX)),
@@ -95,7 +95,7 @@ const STYLE_HELPER = `  // ===== mermaid-rounded: 节点外观参数（唯一入
       minWidth: pick(o.minWidth, d.minWidth)
     };
   }
-  // ===== end mermaid-rounded =====
+  // ===== end gpt-mermaid =====
   // 说明：自适应不再依赖注入 CSS，见下面的「label div 创建即收缩」补丁。
 ${ANCHOR_DRAWRECT}`;
 
@@ -108,7 +108,7 @@ js = replaceOnce(
   js,
   'drawRect：宽度按真实文字宽 + minWidth',
   `    const totalWidth = Math.max(bbox.width + options2.labelPaddingX * 2, node2?.width || 0);`,
-  `    // ===== mermaid-rounded =====
+  `    // ===== gpt-mermaid =====
     // bbox 在这里不可信：上游 label 的 div 被 max-width:wrappingWidth(120) 拉满，
     // 于是 bbox.width 恒为 120，「提」和「提交申请」算出一样的 152px。
     // 直接量内层文字（.nodeLabel）的真实宽度作为基准，文字没有时才退回 bbox。
@@ -135,11 +135,12 @@ js = replaceOnce(
     };
     const __tw = __measureText(__textOf(node2), __divEl || __rootEl);
     const __basisW = __tw > 1 ? __tw : bbox.width;
+    const __wrapW = getConfig2()?.flowchart?.wrappingWidth ?? 200;
     const __nodeW = node2 && typeof node2.width === "number" && Math.abs(node2.width - __wrapW) > 0.5
       ? node2.width
       : 0;
     const totalWidth = Math.max(__basisW + options2.labelPaddingX * 2, __nodeW, options2.minWidth || 0);
-    // ===== end mermaid-rounded =====`
+    // ===== end gpt-mermaid =====`
 );
 
 // ---------------------------------------------------------------------------
@@ -190,11 +191,13 @@ js = replaceOnce(
   `  async function question(parent4, node2) {
     const { labelStyles, nodeStyles } = styles2String(node2);`,
   `  async function question(parent4, node2) {
-    // ===== mermaid-rounded patch =====
+    // ===== gpt-mermaid patch =====
     // 判定框按普通矩形绘制：宽度 = 文字宽 + 左右内边距，高度 = 文字高 + 上下内边距。
     // 左右各多留 2px，让判定框与普通步骤框在视觉上仍有一点点区别。
     {
       const __st = __mrStyle(node2);
+      // ChatGPT 主题用它区分“决策”与普通步骤节点。
+      node2.cssClasses = ((node2.cssClasses || "") + " mermaid-decision").trim();
       return drawRect3(parent4, node2, {
         rx: __st.radius,
         ry: __st.radius,
@@ -224,7 +227,7 @@ js = replaceOnce(
   `    div.style("display", "table-cell");
     div.style("white-space", "nowrap");
     div.style("line-height", "1.5");`,
-  `    // ===== mermaid-rounded: 量真实文字宽度并锁定 =====
+  `    // ===== gpt-mermaid: 量真实文字宽度并锁定 =====
     // 光改 display 没用：foreignObject 有 1200px 宽，shrink-to-fit 会直接吃到
     // max-width(120)，量出来还是 120。用 Range 直接量文本节点，才是真宽度。
     div.style("display", "table-cell");
@@ -270,14 +273,14 @@ js = replaceOnce(
   `      labelHelper = /* @__PURE__ */ __name(async (parent4, node2, _classes, { ignoreMinWidth = false } = {}) => {
         if (node2.stereotype !== void 0) {`,
   `      labelHelper = /* @__PURE__ */ __name(async (parent4, node2, _classes, { ignoreMinWidth = false } = {}) => {
-        // ===== mermaid-rounded =====
+        // ===== gpt-mermaid =====
         if (node2 && typeof node2.width === "number") {
           const __w = getConfig2()?.flowchart?.wrappingWidth ?? 200;
           if (Math.abs(node2.width - __w) <= 0.5) {
             node2.width = void 0;
           }
         }
-        // ===== end mermaid-rounded =====
+        // ===== end gpt-mermaid =====
         if (node2.stereotype !== void 0) {`
 );
 
@@ -295,7 +298,7 @@ js = replaceOnce(
   js,
   'label 无条件居中',
   `    div.attr("xmlns", "http://www.w3.org/1999/xhtml");`,
-  `    // ===== mermaid-rounded: 无条件居中 =====
+  `    // ===== gpt-mermaid: 无条件居中 =====
     // 方框按文字收缩后（如 55px），label div 仍是 120px 宽；不居中文字会贴左边，
     // 表现就是「状态图文字错位」。
     div.style("text-align", "center");
@@ -314,7 +317,7 @@ js = replaceOnce(
 );
 
 fs.mkdirSync(DIST_DIR, { recursive: true });
-const outJs = path.join(DIST_DIR, 'mermaid.rounded.js');
+const outJs = path.join(DIST_DIR, 'gpt-mermaid.runtime.js');
 fs.writeFileSync(outJs, js);
 log(`\n产出 ${path.relative(ROOT, outJs)}  (${(js.length / 1024 / 1024).toFixed(1)} MB, 源 ${(originalBytes / 1024 / 1024).toFixed(1)} MB)`);
 
@@ -322,7 +325,7 @@ log(`\n产出 ${path.relative(ROOT, outJs)}  (${(js.length / 1024 / 1024).toFixe
 // 5. 压缩（可选）：只是体积优化，不影响行为
 // ---------------------------------------------------------------------------
 if (!argv.includes('--no-minify')) {
-  const outMin = path.join(DIST_DIR, 'mermaid.rounded.min.js');
+  const outMin = path.join(DIST_DIR, 'gpt-mermaid.runtime.min.js');
   try {
     execFileSync(
       'npx',
@@ -331,9 +334,9 @@ if (!argv.includes('--no-minify')) {
     );
     log(`产出 ${path.relative(ROOT, outMin)}  (${(fs.statSync(outMin).size / 1024 / 1024).toFixed(1)} MB)`);
   } catch (e) {
-    log(`\n压缩失败（不影响使用，dist/mermaid.rounded.js 已经可用）：${e.message}`);
-    log('手动压缩：npx esbuild dist/mermaid.rounded.js --minify --outfile=dist/mermaid.rounded.min.js');
+    log(`\n压缩失败（不影响使用，dist/gpt-mermaid.runtime.js 已经可用）：${e.message}`);
+    log('手动压缩：npx esbuild dist/gpt-mermaid.runtime.js --minify --outfile=dist/gpt-mermaid.runtime.min.js');
   }
 }
 
-log('\n完成。示例页：demo/index.html（引用 ../dist/mermaid.rounded.min.js）');
+log('\n完成。示例页：demo/index.html（引用 ../dist/gpt-mermaid.runtime.min.js）');

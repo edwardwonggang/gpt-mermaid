@@ -1,127 +1,182 @@
-# mermaid-rounded
+# gpt-mermaid
 
-把 **mermaid 12.3.0** 的流程图判定框（`B{条件}`）从菱形改成**圆角矩形**，并给所有方框加统一圆角、让方框宽度真正跟着文字走。
+[![CI](https://github.com/edwardwonggang/gpt-mermaid/actions/workflows/ci.yml/badge.svg)](https://github.com/edwardwonggang/gpt-mermaid/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![Mermaid 12.3.0](https://img.shields.io/badge/mermaid-12.3.0-ff3670.svg)](https://mermaid.js.org/)
 
-不用重新构建整个 mermaid 仓库 —— 直接对官方 `dist/mermaid.js` 做锚点替换，产出可用的 bundle。
+**ChatGPT-style Mermaid for any HTML page.**
 
-## 效果（实测，非估算）
+`gpt-mermaid` is a complete browser renderer and UI layer for Mermaid. It combines a patched Mermaid 12.3.0 runtime with ELK layout, rounded self-sized nodes, soft GPT colors, a floating action menu, zoom/pan, fullscreen viewing, SVG download and high-resolution PNG copy.
 
-| 样例 | 官方 12.3.0 | 本仓库 | 面积 |
-| --- | --- | --- | --- |
-| 判定框 · 6 字 | `polygon` 164×164 | `rect` 120×40 · rx=8 | **−82%** |
-| 判定框 · 33 字 | `polygon` 263×263 | `rect` 228×59 · rx=8 | **−81%** |
-| 普通方框 | 152×44 · 直角 | 120×44 · rx=8 | 宽度随文字 |
+The default preset is **GPT**. The UMD build exposes the browser global `GPTMermaid`.
 
-![对比预览](demo/preview.png)
+![demo](./demo/preview.png)
 
-## 改了什么
+## Why
 
-补丁全部集中在 `scripts/apply-patch.mjs`，共 6 处，每处都带断言（上游写法一变就报错，不会静默产出坏包）：
+Plain Mermaid is powerful, but its default flowchart decisions are large diamonds and its labels are often constrained by a fixed wrapping width. `gpt-mermaid` changes the shape pipeline and adds a complete presentation layer:
 
-1. **判定框菱形 → 圆角矩形**
-   上游 `question()` 里 `s = 文字宽 + 文字高`，所以判定框**永远是正方形**，33 个字就是 263×263 的空心大方块，一个判断吃掉整张图。改为走 `drawRect`，宽度 = 文字宽 + 左右内边距。
+- decision diamonds become rounded rectangles that grow with their text;
+- ordinary rectangles get a consistent radius and tighter padding;
+- ELK layered layout is used for complex diagrams;
+- the `gpt` preset uses low-saturation blue nodes, soft borders and open arrows;
+- the inline viewer has no permanent gray toolbar;
+- hover the diagram to reveal the `⋯` menu and fullscreen button;
+- copy source, copy a high-resolution PNG, download SVG, zoom, pan and open fullscreen.
 
-2. **所有方框圆角**
-   `squareRect()` 上游硬编码 `rx: 0, ry: 0`（直角），改为统一 `rx = 8`。
-
-3. **宽度真正随文字**
-   上游把 label div 设成 `display:table` + `max-width:wrappingWidth`（默认 120），被拉满成 120px，于是「提」和「提交申请」都是 152px 宽 —— 这才是"两个字也显示得非常长"的真凶。补丁注入 `!important` 规则让它收缩，并在 `drawRect` 里改用内层 `.nodeLabel` 的实测宽度。
-
-4. **内边距收敛**：`nodePadding * 2`（20px/侧）→ 12px/侧，小方框不再被拉成条。
-
-5. **最小宽度**：极短标签（「是」）不至于缩成一个点（默认 48px）。
-
-6. **多边形转角柔化**：六边形/梯形等保留原几何，只把转角连接改成圆弧（保持 `polygon` 元素，不打断主题的 `.node polygon` 选择器）。
-
-## 用法
-
-```bash
-# 1) 生成（会自动下载官方 12.3.0 到 vendor/，再打补丁 + 压缩）
-node scripts/apply-patch.mjs
-
-# 产物
-#   dist/mermaid.rounded.js       未压缩，可读，便于对照
-#   dist/mermaid.rounded.min.js   压缩版，5.4 MB
-```
+## Quick start
 
 ```html
-<script src="dist/mermaid.rounded.min.js"></script>
+<link rel="stylesheet" href="./dist/gpt-mermaid.css">
+<script src="./dist/gpt-mermaid.umd.js"></script>
+
+<pre><code class="language-mermaid">
+flowchart TD
+  A(["客户端请求"]) --> B{"命中缓存?"}
+  B -->|"是"| C(["直接返回"])
+  B -->|"否"| D["调用上游模型"]
+</code></pre>
+
 <script>
-  mermaid.initialize({ startOnLoad: true, theme: 'base' });
+  GPTMermaid.configure({ preset: "gpt" });
+  GPTMermaid.renderAll();
 </script>
 ```
 
-运行时可调（不用重新打补丁）：
+`gpt-mermaid.umd.js` lazily loads `gpt-mermaid.runtime.min.js` from the same directory. The CSS is also injected automatically, so the `<link>` is optional but recommended for first-paint stability.
 
-```js
-window.__MERMAID_ROUNDED = { radius: 12, paddingX: 16, paddingY: 12, minWidth: 56 };
-```
-
-## 验证
-
-```bash
-node scripts/verify.mjs
-```
-
-用本机 Chrome 真实渲染 `demo/index.html`（左官方 / 右本版），量出尺寸、断言无 console/page error，并输出 `demo/preview.png`。
-
-## 已知边界
-
-- **只支持 12.3.0**。锚点依赖该版本的具体写法；升级上游时 `apply-patch.mjs` 会直接报「锚点命中 0 次」，需要重新对照。
-- **多边形不是真圆角**。六边形/梯形只做了转角柔化（`stroke-linejoin: round`），真圆角要把 `polygon` 改成 `path`，会打断主题里 `.node polygon` 的填充/描边规则，暂未做。
-- **泳道图**的正交路由仍按 `shape === 'question'` 当菱形处理（`router.ts`），普通流程图不受影响。
-- `dist/` 下的文件是构建产物，体积大；需要可读版本用 `--no-minify` 生成。
-
-## 参考
-
-美化思路借鉴了 [lukilabs/beautiful-mermaid](https://github.com/lukilabs/beautiful-mermaid)（Craft 团队）：圆角节点、紧凑内边距、ELK 布局、以及"由内容决定节点尺寸"的做法。
-
-## 许可
-
-补丁脚本与示例：MIT。
-`vendor/mermaid-12.3.0.js` 与 `dist/*` 是 mermaid 的衍生物，遵循 mermaid 自身的 MIT 许可。
-
-## 汇合边合并成一根（dist/mermaid-rounded.arrows.js）
-
-多条边汇入同一节点时，mermaid 会给每条边各画一个箭头，并排挤在节点上方。
-本脚本在渲染后**把线也合并**：按目标节点分组，把各条边的「角点 + 终点」一起搬到同一条
-轴线上（TD 改 x、LR 改 y），横段延长、竖段重合，自然形成一根干线，只保留一个箭头。
-拐角保持直角，不产生斜线，也不改 marker 方向。
-
-> 早期版本只挪终点、不挪角点，会把直角折线拽成斜线、把箭头带歪；还对 svg 字符串做了
-> DOMParser→XMLSerializer 往返，foreignObject 里的 XHTML 闭合标签被破坏，整张图解析报错。
-> 现在的实现只在活 DOM 上改 `d` 的最后两对坐标，不序列化整段 svg。
+### CDN
 
 ```html
-<script src="dist/mermaid.rounded.min.js"></script>
-<script src="dist/mermaid-rounded.arrows.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/edwardwonggang/gpt-mermaid@main/dist/gpt-mermaid.css">
+<script src="https://cdn.jsdelivr.net/gh/edwardwonggang/gpt-mermaid@main/dist/gpt-mermaid.umd.js"></script>
+<script>
+  GPTMermaid.renderAll();
+</script>
 ```
 
-可调参数：
+For production pin a release tag or commit instead of `main`.
+
+## ESM / npm
+
+```bash
+npm install gpt-mermaid
+```
 
 ```js
-window.__MR_ARROWS = {
-  enabled: true,
-  radius: 8,     // 直角拐点的圆弧倒角半径（px）
-  lead: null     // 汇合后引导段长度；null = 自动取「箭头高度 × 4」
-};
+import GPTMermaid, { renderAll, renderSvg } from "gpt-mermaid";
+import "gpt-mermaid/css";
+
+GPTMermaid.configure({ preset: "gpt" });
+await renderAll(document);
+
+const result = await renderSvg("flowchart LR\nA --> B");
+console.log(result.svg, result.width, result.height);
 ```
 
-- **圆弧倒角**：把所有纯 `M/L` 折线的直角拐点替换成 `Q` 曲线（`roundPath()`），
-  已含 `Q/C/A` 的路径原样保留，避免二次变形。实测渲染后路径里带 `Q`。
-- **引导段**：默认 `箭头高度 × 4`（实测箭头 10px → 引导段 40px，含倒角后视觉约 48px），
-  保证箭头不会压在母线上。
-
-## 配色主题 + 子图圆角（dist/mermaid-rounded.themes.js）
+When a bundler rewrites `import.meta.url` or does not copy `dist/gpt-mermaid.runtime.min.js`, set the runtime URL explicitly:
 
 ```js
-MermaidRounded.useTheme('tokyo');                    // linear / github / tokyo / nord
-mermaid.initialize(MermaidRounded.config('tokyo'));   // 下次 render 生效
+GPTMermaid.configure({
+  runtimeUrl: new URL("gpt-mermaid/dist/gpt-mermaid.runtime.min.js", import.meta.url).href
+});
 ```
 
-- 四套主题：`linear`（浅色，默认）、`github`（浅色）、`tokyo`（深色 Tokyo Night）、`nord`（深色）。
-  每套只定义 mermaid 真正会读的变量（`primaryColor` / `primaryBorderColor` / `lineColor` /
-  `clusterBkg` / `edgeLabelBackground` 等），其余交给 `theme: 'base'` 继承。
-- **子图容器圆角**走 CSS 的 `rx`（SVG2 几何属性），不动泳道/子图两条绘图代码路径：
-  `.cluster rect { rx: 8px }`。实测渲染后 `getComputedStyle(rect).rx === '8px'`。
-- 主题本质是配置 + CSS，所以和 `mermaid.rounded.min.js` 解耦：不用主题也能单独用。
+## API
+
+| Method | Description |
+| --- | --- |
+| `configure(options)` | Merge global options and return the effective config. |
+| `renderSvg(source, options)` | Render to `{ svg, width, height, source }` without mounting UI. |
+| `mount(target, source, options)` | Mount a diagram into an element or selector. |
+| `render(source, options)` | Mount into `options.target`, or append a new figure to `body`. |
+| `renderAll(root, options)` | Render all `pre > code.language-mermaid` and `[data-gpt-mermaid-source]` nodes. |
+| `autoRender(options)` | Run `renderAll` after DOMContentLoaded when needed. |
+| `destroy(diagram)` | Release the blob URL, observers and DOM of a mounted diagram. |
+| `sanitizeSource(source)` | Validate and sanitize Mermaid source before rendering. |
+| `sanitizeSvg(svg)` | Apply the built-in SVG allowlist. |
+
+### Direct container
+
+```html
+<div id="diagram"></div>
+<script>
+  GPTMermaid.mount("#diagram", "graph LR\nA --> B");
+</script>
+```
+
+### Auto-render attributes
+
+```html
+<div data-gpt-mermaid-source>
+flowchart LR
+  A --> B
+</div>
+<script>
+  GPTMermaid.renderAll();
+</script>
+```
+
+## Configuration
+
+```js
+GPTMermaid.configure({
+  preset: "gpt",           // gpt | github | linear | tokyo | nord
+  fontFamily: '"PingFang SC", sans-serif',
+  runtimeUrl: "./vendor/mermaid/gpt-mermaid.runtime.min.js",
+  autoInjectStyles: true,
+  maxInlineWidth: 740,
+  fitMaxHeight: Infinity,
+  themeVariables: {
+    primaryColor: "#e5f3ff"
+  }
+});
+```
+
+The `themeVariables` object is merged after the preset, so one-off adjustments are safe.
+
+## Security
+
+- Mermaid is initialized with `securityLevel: "strict"`.
+- `click` directives and `securityLevel` overrides in `%%{init}%%` are removed.
+- Rendered SVG is passed through an allowlist sanitizer; scripts, event handlers, `foreignObject`, external `url(...)`, external `href` and `src` are removed.
+- No remote resources are required at runtime.
+- The package is browser-first; it does not render on the server and does not execute untrusted HTML.
+
+See [SECURITY.md](./SECURITY.md) for the reporting process.
+
+## Development
+
+```bash
+npm install
+npm run build       # generates dist UMD/ESM/CJS bundles
+npm run check       # syntax checks
+npm test            # unit tests
+npm run test:e2e    # Playwright smoke test
+npm run test:all
+```
+
+`npm run build:runtime` regenerates the patched Mermaid runtime from the official 12.3.0 package. The anchor assertions in `scripts/apply-patch.mjs` fail loudly if Mermaid changes.
+
+## Compatibility
+
+- Mermaid runtime: 12.3.0, bundled as `dist/gpt-mermaid.runtime.min.js`.
+- Browsers: modern Chromium, Firefox and Safari with `<dialog>`, `ResizeObserver`, `ClipboardItem` and `createImageBitmap` where the corresponding action is used.
+- The wrapper itself has no framework dependency.
+- The legacy patch scripts and old demos remain available under [docs/legacy-patch.md](./docs/legacy-patch.md) and `demo/legacy.html`.
+
+## Project layout
+
+```text
+src/                 modular wrapper source
+dist/                published UMD/ESM/CJS/CSS and Mermaid runtime
+docs/                API, architecture and patch history
+demo/                browser demos and screenshots
+scripts/             build, static server and runtime patch
+test/                Node and Playwright tests
+.github/workflows/   CI
+```
+
+## License
+
+The wrapper, build scripts and demos are MIT licensed. `dist/gpt-mermaid.runtime.min.js` is a derivative of Mermaid 12.3.0 (MIT) and includes ELK (EPL-2.0) components. See [LICENSE](./LICENSE) and [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).

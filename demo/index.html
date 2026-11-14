@@ -1,162 +1,140 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>mermaid-rounded · 判定框=圆角矩形</title>
-<style>
-  :root{--bg:#f7f8fa;--card:#fff;--line:#e6e8ec;--ink:#1c1f23;--ink2:#5a626e;--ink3:#8b939f;
-    --accent:#2f6df6;--good:#0f8a5f;--warn:#c2410c;--code:#f3f4f7}
-  *{box-sizing:border-box}
-  body{margin:0;padding:30px 26px 70px;background:var(--bg);color:var(--ink);
-    font:14px/1.7 -apple-system,BlinkMacSystemFont,"PingFang SC",Arial,sans-serif;-webkit-font-smoothing:antialiased}
-  .wrap{max-width:1180px;margin:0 auto}
-  h1{font-size:20px;font-weight:650;margin:0 0 6px}
-  .sub{color:var(--ink2);font-size:13px;margin-bottom:22px}
-  .hero{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px 22px;margin-bottom:24px;line-height:1.8}
-  .hero b{color:#8a3d10}
-  .hero .ok{color:var(--good);font-weight:640}
-  table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);
-    border-radius:12px;overflow:hidden;font-size:12.5px;margin-bottom:26px}
-  th{background:#f4f6f9;text-align:left;padding:9px 12px;font-weight:620;color:#3b4657;border-bottom:1px solid var(--line)}
-  td{padding:8px 12px;border-bottom:1px solid #eef0f4;color:#3b4657;font-variant-numeric:tabular-nums}
-  tr:last-child td{border-bottom:none}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
-  @media (max-width:900px){.grid{grid-template-columns:1fr}}
-  .pair{background:#fff;border:1px solid var(--line);border-radius:14px;overflow:hidden}
-  .pair > h2{margin:0;padding:12px 16px;font-size:13px;font-weight:640;border-bottom:1px solid var(--line);
-    display:flex;gap:8px;align-items:baseline}
-  .pair > h2 small{margin-left:auto;font:11px/1 ui-monospace,Menlo,monospace;color:var(--ink3)}
-  .two{display:grid;grid-template-columns:1fr 1fr}
-  .two > div{padding:12px 8px 16px;border-right:1px solid #f0f2f5;min-width:0}
-  .two > div:last-child{border-right:none}
-  .lab{font:10.5px/1 ui-monospace,Menlo,monospace;color:var(--ink3);margin:0 0 8px 6px}
-  .lab.ours{color:var(--good)}
-  .cv{display:flex;justify-content:center;align-items:center;min-height:160px;overflow:auto}
-  .cv svg{max-width:100%;height:auto}
-  pre{grid-column:1/-1;margin:0;padding:11px 14px;background:var(--code);border-top:1px solid var(--line);
-    font:11.5px/1.6 ui-monospace,Menlo,monospace;color:#33383f;overflow:auto;white-space:pre}
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>gpt-mermaid · ChatGPT-style Mermaid for the web</title>
+  <link rel="stylesheet" href="../dist/gpt-mermaid.css">
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1f2937;
+      --muted: #667085;
+      --line: #e6ebf2;
+      --page: #f7f9fc;
+      --card: #fff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: radial-gradient(circle at 10% 0%, #edf5ff 0, transparent 36%), var(--page);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+      line-height: 1.65;
+    }
+    header { max-width: 1100px; margin: 0 auto; padding: 64px 28px 26px; }
+    .eyebrow { color: #3267a8; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    h1 { margin: 10px 0 12px; font-size: clamp(34px, 5vw, 58px); line-height: 1.05; letter-spacing: -.045em; }
+    .lead { max-width: 760px; margin: 0; color: var(--muted); font-size: 17px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+    .actions a, .actions button {
+      display: inline-flex; align-items: center; min-height: 40px; padding: 8px 14px;
+      border: 1px solid #d9e2ef; border-radius: 999px; background: #fff; color: var(--ink);
+      font: inherit; font-size: 13px; font-weight: 600; text-decoration: none; cursor: pointer;
+    }
+    .actions a.primary { border-color: #2563c9; background: #2563c9; color: #fff; }
+    main { max-width: 960px; margin: 0 auto; padding: 0 28px 80px; }
+    article {
+      margin: 24px 0; padding: 28px 30px 16px; border: 1px solid var(--line);
+      border-radius: 20px; background: var(--card); box-shadow: 0 12px 36px #1b2b4208;
+    }
+    article h2 { margin: 0 0 8px; font-size: 20px; }
+    article p { margin: 0 0 18px; color: var(--muted); font-size: 14px; }
+    pre { margin: 0 0 12px; padding: 14px 16px; overflow: auto; border: 1px solid #e9edf4; border-radius: 12px; background: #f8fafc; }
+    code { font: 12.5px/1.7 ui-monospace, "SFMono-Regular", Menlo, monospace; }
+    .badge { display: inline-flex; gap: 6px; align-items: center; color: #27734a; font-size: 12px; }
+    .badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #37a56c; }
+    footer { max-width: 960px; margin: 0 auto; padding: 0 28px 64px; color: var(--muted); font-size: 12px; }
+    @media (max-width: 640px) {
+      header { padding-top: 42px; }
+      main { padding-inline: 14px; }
+      article { padding: 22px 18px 12px; border-radius: 16px; }
+    }
+  </style>
 </head>
 <body>
-<div class="wrap">
-  <h1>mermaid-rounded · 判定框改成圆角矩形，方框宽度随文字自适应</h1>
-  <div class="sub">左侧：官方 mermaid 12.3.0 原始 bundle（CDN）。右侧：本仓库补丁后的 bundle。尺寸均为渲染后实测。</div>
+  <header>
+    <div class="eyebrow">gpt-mermaid 1.0</div>
+    <h1>ChatGPT-style Mermaid.<br>One script. Any page.</h1>
+    <p class="lead">A complete browser renderer with ELK layout, rounded self-sized nodes, soft GPT colors, floating actions, zoom, pan, SVG download and high-resolution PNG copy.</p>
+    <div class="actions">
+      <a class="primary" href="#examples">See examples</a>
+      <a href="../README.md">Read the API</a>
+      <button id="theme-toggle" type="button">Switch theme</button>
+    </div>
+  </header>
+  <main id="examples">
+    <article>
+      <div class="badge">Flowchart · GPT preset</div>
+      <h2>Routing and failure recovery</h2>
+      <p>Decision nodes are rounded rectangles that size to their label instead of huge diamonds.</p>
+      <pre><code class="language-mermaid">flowchart TD
+  classDef danger fill:#fee2e2,stroke:#dc2626,stroke-width:1.5px,color:#7f1d1d
+  classDef success fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px,color:#14532d
 
-  <div class="hero" id="hero">测量中…</div>
-  <table id="tbl"><thead><tr>
-    <th>样例</th><th>官方 · 判定节点</th><th>本版 · 判定节点</th><th>面积</th><th>官方 · 普通方框</th><th>本版 · 普通方框</th>
-  </tr></thead><tbody></tbody></table>
+  A(["客户端请求"]) --> B{"命中缓存?"}
+  B -->|"是"| C(["直接返回缓存"]):::success
+  B -->|"否"| D["调用上游模型"]
+  D --> E{"上游 5xx?"}
+  E -->|"是"| F["指数退避重试"]:::danger
+  E -->|"否"| G(["流式返回客户端"]):::success
+  F -. "最多 3 次" .-> D
+  F -->|"预算耗尽"| H["返回降级提示"]:::danger</code></pre>
+    </article>
 
-  <div class="grid" id="grid"></div>
-</div>
+    <article>
+      <div class="badge">Sequence · soft theme</div>
+      <h2>Streaming request lifecycle</h2>
+      <p>The same runtime applies the smoothed theme to sequence, state, class and ER diagrams.</p>
+      <pre><code class="language-mermaid">sequenceDiagram
+  participant U as 浏览器
+  participant G as AI 网关
+  participant M as 上游模型
+  U->>G: POST /v1/responses
+  G->>M: 发起流式请求
+  M-->>G: SSE delta
+  G-->>U: 实时推送
+  G-->>U: [DONE]</code></pre>
+    </article>
 
-<!-- 官方：CDN ESM -->
-<script type="module">
-import upstream from 'https://cdn.jsdelivr.net/npm/mermaid@12.3.0/dist/mermaid.esm.min.mjs';
-window.__upstream = upstream;
-window.__upstreamReady = true;
-</script>
-<!-- 本仓库补丁产物（IIFE，暴露 window.mermaid） -->
-<script src="../dist/mermaid.rounded.min.js"></script>
-
-<script>
-const CASES = [
-  { id:'short', title:'短判定 · 6 字', tag:'文字少也不拉长',
-    code:`flowchart TD
-    S[提交] --> B{资料齐全}
-    B -->|是| P[通过]
-    B -->|否| R[退回]` },
-  { id:'long', title:'长判定 · 33 字', tag:'不再撑成大方块',
-    code:`flowchart TD
-    S[提交] --> B{申请资料是否齐全且签章有效金额未超限且客户不在风险名单内}
-    B -->|是| P[通过]
-    B -->|否| R[退回]` }
-];
-
-const cfg = {
-  startOnLoad:false, theme:'base',
-  themeVariables:{ fontFamily:'-apple-system,"PingFang SC",Arial,sans-serif', fontSize:'13px',
-    primaryColor:'#eef2ff', primaryBorderColor:'#9aa8c8', primaryTextColor:'#1c1f23', lineColor:'#8a94a3' },
-  flowchart:{ curve:'basis', nodeSpacing:40, rankSpacing:36, padding:12, useMaxWidth:true }
-};
-
-const grid = document.getElementById('grid');
-const tbody = document.querySelector('#tbl tbody');
-
-function measure(root, idPart) {
-  const nodes = [...root.querySelectorAll('g.node')];
-  const el = nodes.find(n => new RegExp('-' + idPart + '-').test(n.id)) || nodes[0];
-  if (!el) return null;
-  const b = el.getBBox();
-  const shape = el.querySelector('rect,polygon,path');
-  return {
-    w: Math.round(b.width), h: Math.round(b.height), area: Math.round(b.width * b.height),
-    tag: shape ? shape.tagName.toLowerCase() : '?',
-    rx: shape && shape.tagName.toLowerCase() === 'rect' ? shape.getAttribute('rx') : null
-  };
-}
-
-(async () => {
-  await new Promise(res => {
-    if (window.__upstreamReady && window.mermaid) return res();
-    const t = setInterval(() => {
-      if (window.__upstreamReady && window.mermaid) { clearInterval(t); res(); }
-    }, 50);
-  });
-
-  window.__upstream.initialize(cfg);
-  window.mermaid.initialize(cfg);
-
-  const rows = [];
-  for (const c of CASES) {
-    const pair = document.createElement('section');
-    pair.className = 'pair';
-    pair.innerHTML = `<h2>${c.title} <small>${c.tag}</small></h2>
-      <div class="two">
-        <div><p class="lab">官方 12.3.0</p><div class="cv" id="up-${c.id}"></div></div>
-        <div><p class="lab ours">mermaid-rounded</p><div class="cv" id="fk-${c.id}"></div></div>
-      </div>
-      <pre></pre>`;
-    pair.querySelector('pre').textContent = c.code;
-    grid.appendChild(pair);
-
-    try {
-      const a = await window.__upstream.render('upj-' + c.id, c.code);
-      document.getElementById('up-' + c.id).innerHTML = a.svg;
-    } catch (e) { document.getElementById('up-' + c.id).textContent = 'render failed: ' + e.message; }
-    try {
-      const b = await window.mermaid.render('fkj-' + c.id, c.code);
-      document.getElementById('fk-' + c.id).innerHTML = b.svg;
-    } catch (e) { document.getElementById('fk-' + c.id).textContent = 'render failed: ' + e.message; }
-
-    const upD = measure(document.getElementById('up-' + c.id), 'B');
-    const fkD = measure(document.getElementById('fk-' + c.id), 'B');
-    const upS = measure(document.getElementById('up-' + c.id), 'S');
-    const fkS = measure(document.getElementById('fk-' + c.id), 'S');
-    rows.push({ c, upD, fkD, upS, fkS });
-
-    const tr = document.createElement('tr');
-    const pct = upD && fkD ? Math.round((fkD.area / upD.area - 1) * 100) : null;
-    tr.innerHTML = `<td><b>${c.title}</b></td>
-      <td>${upD ? `${upD.tag} ${upD.w}×${upD.h}` : '—'}</td>
-      <td>${fkD ? `${fkD.tag} ${fkD.w}×${fkD.h}${fkD.rx ? ` · rx=${fkD.rx}` : ''}` : '—'}</td>
-      <td style="color:${pct !== null && pct < 0 ? 'var(--good)' : 'inherit'};font-weight:640">${pct === null ? '—' : (pct > 0 ? '+' : '') + pct + '%'}</td>
-      <td>${upS ? `${upS.w}×${upS.h}` : '—'}</td>
-      <td>${fkS ? `${fkS.w}×${fkS.h}${fkS.rx ? ` · rx=${fkS.rx}` : ''}` : '—'}</td>`;
-    tbody.appendChild(tr);
-  }
-
-  const s = rows[0], l = rows[1];
-  document.getElementById('hero').innerHTML =
-    `<b>判定框不再是菱形。</b>6 字条件：官方 ${s.upD.w}×${s.upD.h} 的菱形 →
-     本版 <span class="ok">${s.fkD.w}×${s.fkD.h}</span> 的圆角矩形；
-     33 字条件：${l.upD.w}×${l.upD.h} → <span class="ok">${l.fkD.w}×${l.fkD.h}</span>，
-     面积只剩 <b>${Math.round(l.fkD.area / l.upD.area * 100)}%</b>。
-     普通步骤框统一 <b>rx=${(s.fkS && s.fkS.rx) || 8}</b> 圆角，宽度依旧跟着文字走，
-     左右各留 12px 内边距。`;
-  window.__done = true;
-})();
-</script>
+    <article>
+      <div class="badge">State · no extra setup</div>
+      <h2>Task state machine</h2>
+      <pre><code class="language-mermaid">stateDiagram-v2
+  [*] --> 待处理
+  待处理 --> 调度中 : 提交任务
+  调度中 --> 运行中 : 分配成功
+  运行中 --> 已完成 : 正常退出
+  运行中 --> 失败重试 : 上游超时
+  失败重试 --> 调度中 : 未达上限</code></pre>
+    </article>
+  </main>
+  <footer>
+    MIT licensed wrapper and patch scripts. Mermaid and ELK retain their upstream licenses. See THIRD_PARTY_NOTICES.md.
+  </footer>
+  <script src="../dist/gpt-mermaid.umd.js"></script>
+  <script>
+    GPTMermaid.configure({ preset: "gpt" });
+    GPTMermaid.renderAll();
+    let dark = false;
+    document.getElementById("theme-toggle").addEventListener("click", async () => {
+      dark = !dark;
+      GPTMermaid.configure({ preset: dark ? "tokyo" : "gpt" });
+      document.documentElement.style.colorScheme = dark ? "dark" : "light";
+      document.body.style.background = dark ? "#161821" : "";
+      document.body.style.color = dark ? "#e5e7eb" : "";
+      document.querySelectorAll("article").forEach((el) => {
+        el.style.background = dark ? "#1f2335" : "";
+        el.style.borderColor = dark ? "#343b58" : "";
+      });
+      const records = [...document.querySelectorAll(".mgpt-diagram")].map((el, index) => el);
+      // Re-render by replacing the current figures from their hidden sources.
+      for (const figure of records) {
+        const pre = figure.querySelector("pre");
+        if (pre) figure.replaceWith(pre);
+      }
+      await GPTMermaid.renderAll();
+    });
+  </script>
 </body>
 </html>

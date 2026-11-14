@@ -1,5 +1,5 @@
 /**
- * mermaid-rounded.arrows.js —— 多条边汇入同一节点时合并成一根干线
+ * gpt-mermaid.arrows.js —— 多条边汇入同一节点时合并成一根干线
  *
  * 目标：`A --> C` 和 `B --> C` 这种汇合，不要几条线各带一个箭头并排挤在节点上方，
  *      而是**线也合成一根**：各条边先沿轴向收到同一条线上，再一起进节点，
@@ -23,14 +23,14 @@
  *   · 曲线段被改坐标 → 出斜线；
  *   · 改错朝向判断 → 布局崩坏。
  * 正确做法是在**路由层**（mermaid 的 edge routing / 正交路由）合并，而不是改渲染后的 SVG。
- * 因此默认关闭；需要尝试时设 window.__MR_ARROWS.enabled = true 再调用。
+ * 因此默认关闭；需要尝试时设 window.__GPTM_ARROWS.enabled = true 再调用。
  *
  * 用法：
  *   1) 自动：放在 mermaid 之后引入（MutationObserver 监听 svg 插入）
- *   2) 手动：window.mermaidRoundedFixArrows(svgOrContainer)
+ *   2) 手动：window.gptMermaidFixArrows(svgOrContainer)
  */
 (function () {
-  var cfg = (window.__MR_ARROWS = window.__MR_ARROWS || {});
+  var cfg = (window.__GPTM_ARROWS = window.__GPTM_ARROWS || {});
   if (cfg.enabled == null) cfg.enabled = true;
 
   // 把 d 里的数字全部取出来（含 index），坐标是成对出现的：
@@ -244,7 +244,7 @@
     }
   }
 
-  window.mermaidRoundedFixArrows = fix;
+  window.gptMermaidFixArrows = fix;
 
   if (typeof MutationObserver !== 'undefined' && document.body) {
     var obs = new MutationObserver(function (muts) {

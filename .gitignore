@@ -2,7 +2,11 @@
 vendor/
 
 # 未压缩产物可随时用 --no-minify 重新生成
-dist/mermaid.rounded.js
+dist/gpt-mermaid.runtime.js
 
 node_modules/
 .DS_Store
+output/
+.playwright/
+coverage/
+*.log

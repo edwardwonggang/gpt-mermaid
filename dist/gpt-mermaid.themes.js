@@ -1,16 +1,16 @@
 /**
- * mermaid-rounded.themes.js —— 配色主题 + 子图圆角（纯 CSS / 配置层，不改绘图逻辑）
+ * gpt-mermaid.themes.js —— 配色主题 + 子图圆角（纯 CSS / 配置层，不改绘图逻辑）
  *
  * 为什么单独一个文件：
  *   · 主题本质是一组 CSS 变量，用 mermaid 的 themeVariables 就能表达，不需要动 bundle；
  *   · 子图容器用 CSS 的 `rx`（SVG2 几何属性）加圆角，避免去改泳道/子图两条绘图代码路径。
  *
  * 用法：
- *   <script src="dist/mermaid.rounded.min.js"></script>
- *   <script src="dist/mermaid-rounded.themes.js"></script>
+ *   <script src="dist/gpt-mermaid.runtime.min.js"></script>
+ *   <script src="dist/gpt-mermaid.themes.js"></script>
  *   <script>
- *     MermaidRounded.useTheme('linear');       // 切换主题（会在下次 render 生效）
- *     mermaid.initialize(MermaidRounded.config('linear'));
+ *     GPTMermaidThemes.useTheme('linear');
+ *     mermaid.initialize(GPTMermaidThemes.config('linear'));
  *   </script>
  *
  * 主题列表：linear（默认浅色）/ github / tokyo（深色）/ nord（深色）
@@ -102,9 +102,9 @@
 
   function ensureStyle(doc) {
     doc = doc || document;
-    if (!doc.getElementById('mermaid-rounded-cluster-style')) {
+    if (!doc.getElementById('gpt-mermaid-cluster-style')) {
       var st = doc.createElement('style');
-      st.id = 'mermaid-rounded-cluster-style';
+      st.id = 'gpt-mermaid-cluster-style';
       st.textContent = CLUSTER_CSS;
       (doc.head || doc.documentElement).appendChild(st);
     }
@@ -149,7 +149,7 @@
     ensureStyle();
   }
 
-  window.MermaidRounded = {
+  window.GPTMermaidThemes = {
     themes: THEMES,
     config: config,
     useTheme: useTheme,
