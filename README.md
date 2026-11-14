@@ -10,6 +10,8 @@
 
 The default preset is **GPT**. The UMD build exposes the browser global `GPTMermaid`.
 
+> **Not affiliated with OpenAI or the Mermaid project.** “ChatGPT-style” only describes the visual presentation. See [NOTICE.md](./NOTICE.md).
+
 ![demo](./demo/preview.png)
 
 ## Why
@@ -144,6 +146,14 @@ The `themeVariables` object is merged after the preset, so one-off adjustments a
 - The package is browser-first; it does not render on the server and does not execute untrusted HTML.
 
 See [SECURITY.md](./SECURITY.md) for the reporting process.
+
+## npm publishing
+
+The package name `gpt-mermaid` is intended to be published as a public
+unscoped npm package. Publishing requires an authenticated npm account and
+2FA/OTP when enabled on the account. Licensing details are in
+[THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) and
+[LICENSES/README.md](./LICENSES/README.md).
 
 ## Development
 
