@@ -1,7 +1,7 @@
 {
   "name": "gpt-mermaid",
   "version": "1.0.0",
-  "description": "ChatGPT-style Mermaid renderer with rounded nodes, self-sized decision boxes and a complete browser API.",
+  "description": "Independent, unofficial ChatGPT-style Mermaid renderer with rounded nodes, self-sized decision boxes and a complete browser API.",
   "type": "module",
   "main": "./dist/gpt-mermaid.cjs",
   "module": "./dist/gpt-mermaid.esm.js",
