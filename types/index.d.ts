@@ -12,6 +12,12 @@ export interface GPTMermaidConfig {
   download?: boolean;
   maxInlineWidth?: number;
   fitMaxHeight?: number;
+  adaptiveLayout?: false | {
+    enabled?: boolean;
+    maxWidth?: number;
+    maxHeight?: number;
+    gap?: number;
+  };
   target?: string | Element;
   container?: string | Element;
   sourceElement?: Element | null;
@@ -72,7 +78,6 @@ export const destroy: GPTMermaidApi["destroy"];
 
 declare global {
   interface Window {
-    GPTMermaid: GPTMermaidApi;
     GPTMermaid: GPTMermaidApi;
   }
 }

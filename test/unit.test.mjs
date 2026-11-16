@@ -9,7 +9,7 @@ test("exports a standard ES module API", () => {
   assert.equal(typeof GPTMermaid.renderAll, "function");
   assert.equal(typeof GPTMermaid.configure, "function");
   assert.equal(typeof GPTMermaid.mount, "function");
-  assert.equal(GPTMermaid.version, "1.0.1");
+  assert.equal(GPTMermaid.version, "1.0.2");
 });
 
 test("sanitizes unsafe Mermaid configuration and clicks", () => {
@@ -20,9 +20,13 @@ test("sanitizes unsafe Mermaid configuration and clicks", () => {
 
 test("provides built-in presets and merges configuration", () => {
   assert(presets.gpt.node);
+  assert.notEqual(presets.gpt.lineRight, presets.gpt.lineDown);
+  assert.notEqual(presets.gpt.lineLeft, presets.gpt.lineUp);
   const config = GPTMermaid.configure({ preset: "github", themeVariables: { primaryColor: "#fff" } });
   assert.equal(config.preset, "github");
   assert.equal(config.themeVariables.primaryColor, "#fff");
+  assert(config.themeVariables.gptMermaidLineRight);
+  assert(config.themeVariables.gptMermaidLineDown);
 });
 
 test("package metadata exposes browser and npm entrypoints", async () => {
@@ -31,4 +35,5 @@ test("package metadata exposes browser and npm entrypoints", async () => {
   assert.equal(pkg.exports["."].import, "./dist/gpt-mermaid.esm.js");
   assert.equal(pkg.exports["."].require, "./dist/gpt-mermaid.cjs");
   assert.equal(pkg.exports["./css"], "./dist/gpt-mermaid.css");
+  assert(pkg.files.includes("demo/compatibility.html"));
 });

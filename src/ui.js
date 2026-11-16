@@ -191,9 +191,16 @@ export function createUi({ renderSvg, getConfig }) {
     let pointer = null;
     record.motion = {
       wheel(event) {
-        if (!event.ctrlKey || !record.result) return;
+        if (!record.result) return;
+        const inViewer = record.state.viewer?.dialog?.open
+          && record.state.viewer.viewport.contains(record.stage);
+        // 全屏是独立查看器，普通滚轮即可缩放；行内图仍让普通滚轮滚动页面，
+        // 避免长文阅读经过图表时被意外“截住”。触控板像素/行/页单位归一化。
+        if (!inViewer && !event.ctrlKey) return;
         event.preventDefault();
-        zoom(record, record.zoom * Math.exp(-event.deltaY * .002), false, { x: event.clientX, y: event.clientY });
+        const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? record.stage.clientHeight : 1;
+        const delta = Math.min(600, Math.max(-600, event.deltaY * unit));
+        zoom(record, record.zoom * Math.exp(-delta * .002), false, { x: event.clientX, y: event.clientY });
       },
       down(event) {
         if (event.button !== 0 || !record.result) return;
@@ -277,6 +284,7 @@ export function createUi({ renderSvg, getConfig }) {
     if (state.viewer.record && (state.viewer.record !== record || !state.viewer.dialog.open)) closeViewer(state, false);
     state.viewer.record = record;
     state.viewer.viewport.append(record.stage);
+    record.stage.setAttribute("aria-label", "滚轮缩放，拖动平移，Home 复位");
     if (!state.viewer.dialog.open) state.viewer.dialog.showModal();
     zoom(record, 1, true);
   }
@@ -288,6 +296,7 @@ export function createUi({ renderSvg, getConfig }) {
     current.record = null;
     if (record) {
       record.viewport.append(record.stage);
+      record.stage.setAttribute("aria-label", "Ctrl + 滚轮缩放，拖动平移，Home 复位");
       zoom(record, 1, true);
     }
     if (closeDialog && current.dialog.open) current.dialog.close();
@@ -362,12 +371,14 @@ export function createUi({ renderSvg, getConfig }) {
       };
       record.image.onerror = () => {
         record.loading = false;
+        record.image.hidden = true;
         setStatus(record, "error", "图片无法显示，可重试或检查源码。");
       };
       record.image.src = record.url;
       record.image.hidden = false;
     } catch (error) {
       record.loading = false;
+      record.image.hidden = true;
       setStatus(record, "error", error.message || String(error));
     }
   }
@@ -422,7 +433,7 @@ export function createUi({ renderSvg, getConfig }) {
     const stage = doc.createElement("div");
     stage.className = "mgpt-stage";
     stage.tabIndex = 0;
-    stage.setAttribute("aria-label", "Ctrl+wheel to zoom, drag to pan, Home to reset");
+    stage.setAttribute("aria-label", "Ctrl + 滚轮缩放，拖动平移，Home 复位");
     const image = doc.createElement("img");
     image.className = "mgpt-image";
     image.alt = "Mermaid diagram";

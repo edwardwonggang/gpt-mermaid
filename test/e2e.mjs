@@ -7,6 +7,8 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { verifyRenderingGeometry } from "./render-geometry.mjs";
+import { verifyLayoutQuality } from "./layout-quality.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 4173;
@@ -42,7 +44,7 @@ try {
     if (/^https?:/.test(url) && !url.startsWith(`http://127.0.0.1:${PORT}`)) external.push(url);
   });
   await page.goto(`http://127.0.0.1:${PORT}/demo/index.html`, { waitUntil: "domcontentloaded" });
-  await page.waitForFunction(() => window.GPTMermaid?.version === "1.0.1");
+  await page.waitForFunction(() => window.GPTMermaid?.version === "1.0.2");
   const diagrams = page.locator(".mgpt-diagram");
   await page.waitForFunction(() => [...document.querySelectorAll(".mgpt-diagram")].every((el) => ["ready", "error"].includes(el.dataset.state)), null, { timeout: 30000 });
   assert.equal(await diagrams.count(), 3);
@@ -59,7 +61,47 @@ try {
       GPTMermaid.renderSvg("classDiagram\nclass Api\nclass Client\nApi --> Client : calls"),
       GPTMermaid.renderSvg("erDiagram\nUSER ||--o{ ORDER : places"),
       GPTMermaid.renderSvg("sequenceDiagram\nA->>B: ping\nB-->>A: pong"),
+      GPTMermaid.renderSvg("mindmap\n  root((Root))\n    Browser\n    Runtime"),
+      GPTMermaid.renderSvg("timeline\ntitle History\n2020 : Launch\n2021 : Scale"),
+      GPTMermaid.renderSvg("xychart-beta\n  x-axis [Jan, Feb, Mar]\n  y-axis 0 --> 100\n  bar [30, 50, 80]"),
+      GPTMermaid.renderSvg("requirementDiagram\n  requirement req1 {\n    id: 1\n    text: API\n    risk: Low\n    verifymethod: Test\n  }\n  element test1 {\n    type: simulation\n  }\n  req1 - verifies -> test1"),
     ]);
+    const directionResults = await Promise.all([
+      GPTMermaid.renderSvg("flowchart TD\nA --> B\nB --> C\nC --> A"),
+      GPTMermaid.renderSvg("flowchart LR\nA --> B\nB --> C\nC --> A"),
+    ]);
+    const erResult = await GPTMermaid.renderSvg("erDiagram\nUSER ||--o{ ORDER : places");
+    const classResult = await GPTMermaid.renderSvg("classDiagram\nclass A\nclass B\nA ..> B : uses");
+    const sequenceResult = await GPTMermaid.renderSvg(
+      "sequenceDiagram\n  autonumber\n  participant U as Browser\n  participant G as Gateway\n  U->>G: POST /responses\n  G-->>U: event stream"
+    );
+    const journeyResult = await GPTMermaid.renderSvg(
+      "journey\n  title Setup journey\n  section Configure\n    Open settings: 5: User\n    Create token: 3: User\n  section Verify\n    Send request: 4: User"
+    );
+    const erCenterResult = await GPTMermaid.renderSvg(
+      "erDiagram\n  CUSTOMER ||--o{ ORDER : places\n  ORDER ||--|{ ORDER_ITEM : contains"
+    );
+    const classConnectResult = await GPTMermaid.renderSvg(
+      "classDiagram\n  class Client {\n    +String token\n    +send()\n  }\n  class Gateway\n  Gateway <|-- Client\n  Client ..> Gateway : calls"
+    );
+    const inspectEdges = (rendered) => {
+      const parsed = new DOMParser().parseFromString(rendered.svg, "image/svg+xml");
+      return {
+        edges: [...parsed.querySelectorAll("[data-gptm-direction]")].map((edge) => ({
+          direction: edge.dataset.gptmDirection,
+          stroke: edge.style.stroke,
+          linecap: edge.style.strokeLinecap,
+        })),
+        markers: [...parsed.querySelectorAll("marker[id*='-gptm-']")].map((marker) => ({
+          id: marker.id,
+          width: Number(marker.getAttribute("markerWidth")),
+          height: Number(marker.getAttribute("markerHeight")),
+          path: marker.querySelector("path")?.getAttribute("d") || "",
+          fill: marker.querySelector("path")?.style.fill || "",
+          stroke: marker.querySelector("path")?.style.stroke || "",
+        })),
+      };
+    };
     const host = document.createElement("div");
     document.body.append(host);
     const diagram = await GPTMermaid.mount(host, "flowchart LR\nA[API] --> B[Mount]");
@@ -89,12 +131,68 @@ try {
       borderWidth: stateRect ? getComputedStyle(stateRect).strokeWidth : "",
     };
     stateHost.remove();
+    const attach = (svgText) => {
+      const host = document.createElement("div");
+      host.style.cssText = "position:absolute;left:-100000px;top:0;width:max-content;";
+      host.innerHTML = svgText;
+      document.body.append(host);
+      return host;
+    };
+    const erCenterHost = attach(erCenterResult.svg);
+    const erCenterNodes = [...erCenterHost.querySelectorAll("g.node")].map((node) => {
+      const rect = node.querySelector("rect.basic.label-container");
+      const text = node.querySelector(":scope > g.label text");
+      const rectBox = rect?.getBoundingClientRect();
+      const textBox = text?.getBoundingClientRect();
+      return {
+        name: text?.textContent?.trim() || "",
+        delta: rectBox && textBox
+          ? Math.abs((rectBox.left + rectBox.width / 2) - (textBox.left + textBox.width / 2))
+          : Infinity,
+      };
+    });
+    erCenterHost.remove();
+    const classConnectHost = attach(classConnectResult.svg);
+    const classNodes = [...classConnectHost.querySelectorAll("g.node")].map((node) => {
+      const box = node.querySelector(".label-container")?.getBoundingClientRect();
+      return box ? { left: box.left, top: box.top, right: box.right, bottom: box.bottom } : null;
+    }).filter(Boolean);
+    const connectionGaps = [...classConnectHost.querySelectorAll(".relation")].map((edge) => {
+      const matrix = edge.getScreenCTM();
+      const length = edge.getTotalLength();
+      return [0, length].map((offset) => {
+        const local = edge.getPointAtLength(offset);
+        const point = new DOMPoint(local.x, local.y).matrixTransform(matrix);
+        return Math.min(...classNodes.map((box) => Math.hypot(
+          Math.max(box.left - point.x, 0, point.x - box.right),
+          Math.max(box.top - point.y, 0, point.y - box.bottom)
+        )));
+      });
+    });
+    classConnectHost.remove();
+    const sequenceHost = attach(sequenceResult.svg);
+    const sequenceNumberFills = [...sequenceHost.querySelectorAll("text")]
+      .filter((text) => /^\d+$/.test(text.textContent.trim()))
+      .map((text) => getComputedStyle(text).fill);
+    sequenceHost.remove();
+    const journeyTexts = [...new DOMParser().parseFromString(journeyResult.svg, "image/svg+xml").querySelectorAll("text")]
+      .map((text) => text.textContent.trim())
+      .filter(Boolean);
     return {
       width: result.width,
       height: result.height,
       mounted: Boolean(diagram?.figure),
       controller: ["destroy", "fit", "zoomIn", "zoomOut", "download", "copySource", "copyImage", "expand"].every((key) => typeof diagram[key] === "function"),
       extras: extras.map((item) => item.svg.length > 1000),
+      directions: directionResults.map(inspectEdges),
+      triangleFamilies: [extras[0], extras[3], extras[5]].map(inspectEdges),
+      erSemantics: inspectEdges(erResult),
+      classSemantics: inspectEdges(classResult),
+      sequenceSemantics: inspectEdges(sequenceResult),
+      sequenceNumberFills,
+      journeyTexts,
+      erCenterNodes,
+      connectionGaps,
       safeSvg,
       stateGeometry,
     };
@@ -102,15 +200,56 @@ try {
   assert(programmatic.width > 0 && programmatic.height > 0);
   assert.equal(programmatic.mounted, true);
   assert.equal(programmatic.controller, true);
-  assert.deepEqual(programmatic.extras, [true, true, true, true]);
+  assert.deepEqual(programmatic.extras, [true, true, true, true, true, true, true, true]);
   assert.doesNotMatch(programmatic.safeSvg, /script|evil\.invalid|<image/i);
   assert.match(programmatic.safeSvg, /safe/);
-  assert.match(programmatic.stateGeometry.labelTransform, /^translate\(0[, ]/);
-  assert.equal(programmatic.stateGeometry.anchor, "middle");
   assert.equal(programmatic.stateGeometry.rows, 1);
   assert(programmatic.stateGeometry.centerDelta < 1, JSON.stringify(programmatic.stateGeometry));
-  assert.equal(programmatic.stateGeometry.border, "rgb(139, 185, 224)");
-  assert.equal(programmatic.stateGeometry.borderWidth, "1.2px");
+  assert.equal(programmatic.stateGeometry.border, "rgb(91, 143, 189)");
+  assert.equal(programmatic.stateGeometry.borderWidth, "1.5px");
+  const edges = programmatic.directions.flatMap((diagram) => diagram.edges);
+  const directionColors = {
+    right: "rgb(37, 99, 235)",
+    down: "rgb(15, 118, 110)",
+    left: "rgb(194, 65, 12)",
+    up: "rgb(124, 58, 237)",
+  };
+  assert.deepEqual(new Set(edges.map((edge) => edge.direction)), new Set(["right", "down", "left", "up"]));
+  for (const edge of edges) assert.equal(edge.stroke, directionColors[edge.direction], JSON.stringify(edge));
+  const triangleMarkers = [...programmatic.directions, ...programmatic.triangleFamilies].flatMap((diagram) => diagram.markers);
+  assert(triangleMarkers.length >= 8);
+  for (const marker of triangleMarkers) {
+    assert(marker.width > marker.height, JSON.stringify(marker));
+    const values = marker.path.match(/[-+]?\d*\.?\d+/g)?.map(Number) || [];
+    assert.equal(values.length, 6, JSON.stringify(marker));
+    const [x0, y0, x1, y1, x2, y2] = values;
+    assert.equal(x0, 0);
+    assert.equal(y0, 0);
+    assert.equal(x2, 0);
+    assert.equal(y2, 8);
+    assert.equal(x1, 10);
+    assert.equal(y1, 4);
+    assert(Math.abs(marker.width / marker.height - 1.25) < 0.001, JSON.stringify(marker));
+    assert.notEqual(marker.fill, "none", JSON.stringify(marker));
+  }
+  assert(programmatic.erSemantics.markers.some((marker) => marker.id.includes("zeroOrMoreEnd") && marker.path === "M21,18 Q39,0 57,18 Q39,36 21,18"));
+  assert(programmatic.classSemantics.markers.some((marker) => marker.id.includes("dependencyEnd") && marker.width > marker.height && marker.fill !== "none"));
+  assert.deepEqual(
+    programmatic.sequenceSemantics.edges.map((edge) => edge.direction),
+    ["right", "left"]
+  );
+  assert.deepEqual(
+    programmatic.sequenceSemantics.edges.map((edge) => edge.stroke),
+    [directionColors.right, directionColors.left]
+  );
+  assert(programmatic.sequenceSemantics.edges.every((edge) => edge.linecap === "butt"));
+  assert(programmatic.sequenceNumberFills.every((fill) => fill === "rgb(255, 255, 255)"), JSON.stringify(programmatic.sequenceNumberFills));
+  for (const label of ["Configure", "Open settings", "Create token", "Verify", "Send request"]) {
+    assert(programmatic.journeyTexts.includes(label), `${label} missing: ${JSON.stringify(programmatic.journeyTexts)}`);
+  }
+  assert(programmatic.erCenterNodes.length >= 3);
+  assert(programmatic.erCenterNodes.every((node) => node.delta < 1), JSON.stringify(programmatic.erCenterNodes));
+  assert(programmatic.connectionGaps.flat().every((gap) => gap < 1), JSON.stringify(programmatic.connectionGaps));
 
   const first = diagrams.first();
   await first.hover();
@@ -124,6 +263,16 @@ try {
   await first.locator('[data-mgpt-action="expand"]').click();
   await page.waitForFunction(() => Boolean(document.querySelector(".mgpt-dialog")?.open));
   assert.equal(await page.locator(".mgpt-dialog .mgpt-image").count(), 1);
+  const fullStage = page.locator(".mgpt-dialog .mgpt-stage");
+  const fullBox = await fullStage.boundingBox();
+  await page.mouse.move(fullBox.x + fullBox.width * 0.7, fullBox.y + fullBox.height * 0.4);
+  await page.mouse.wheel(0, -240);
+  await page.waitForFunction((el) => Number(el.dataset.zoom) > 1, await fullStage.elementHandle());
+  const enlargedZoom = Number(await fullStage.getAttribute("data-zoom"));
+  assert(Math.abs(Number(await fullStage.getAttribute("data-pan-x"))) > 0);
+  await page.mouse.wheel(0, 240);
+  await page.waitForFunction(({ el, before }) => Number(el.dataset.zoom) < before, { el: await fullStage.elementHandle(), before: enlargedZoom });
+  assert(Math.abs(Number(await fullStage.getAttribute("data-zoom")) - 1) < 0.01);
   await page.screenshot({ path: path.join(output, "e2e-fullscreen.png") });
   await page.locator('.mgpt-dialog [data-mgpt-action="close"]').click();
   await page.waitForFunction(() => !document.querySelector(".mgpt-dialog")?.open);
@@ -131,6 +280,10 @@ try {
 
   const stage = first.locator(".mgpt-stage");
   const before = await stage.getAttribute("data-zoom");
+  await stage.hover();
+  await page.mouse.wheel(0, 160);
+  await page.waitForTimeout(100);
+  assert.equal(await stage.getAttribute("data-zoom"), before, "行内普通滚轮不能缩放");
   await stage.hover();
   await page.keyboard.down("Control");
   try { await page.mouse.wheel(0, -240); } finally { await page.keyboard.up("Control"); }
@@ -140,6 +293,65 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
   await page.screenshot({ path: path.join(output, "e2e-mobile.png") });
+  await page.goto(`http://127.0.0.1:${PORT}/demo/compatibility.html?suite=base`, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => document.querySelectorAll(".sample[data-result]").length === 22, null, { timeout: 30000 });
+  assert.equal(await page.locator(".sample[data-result='ready']").count(), 21);
+  assert.equal(await page.locator(".sample[data-result='error']").count(), 1);
+  assert.equal(await page.locator(".sample[data-expected='error'][data-result='error']").count(), 1);
+  assert.match(await page.locator("#summary").innerText(), /21 张渲染成功/);
+  assert.equal(await page.locator(".sample[data-sample-id='mindmap'][data-result='ready']").count(), 1);
+  await page.locator("#search").fill("flow-shapes");
+  assert.equal(await page.locator(".sample:visible").count(), 1);
+  await page.locator('[data-sample-id="flow-shapes"] [data-size]').click();
+  assert.equal(await page.locator('[data-sample-id="flow-shapes"]').getAttribute("data-natural"), "true");
+  await page.locator('[data-sample-id="flow-shapes"] [data-size]').click();
+  await page.locator("#reset").click();
+  assert.equal(await page.locator(".sample:visible").count(), 22);
+  await page.screenshot({ path: path.join(output, "compatibility-mobile.png"), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await verifyRenderingGeometry(page, path.join(output, "playwright"));
+  await page.screenshot({ path: path.join(output, "compatibility-desktop.png"), fullPage: true });
+  await page.goto(`http://127.0.0.1:${PORT}/demo/compatibility.html`, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => document.body.dataset.labReady === "true", null, { timeout: 120000 });
+  const stress = await page.evaluate(() => ({
+    total: window.GPT_MERMAID_LAB_CASES.length,
+    families: new Set(window.GPT_MERMAID_LAB_CASES.map((item) => item.type)).size,
+    ready: document.querySelectorAll('.sample[data-result="ready"]').length,
+    unexpected: [...document.querySelectorAll('.sample[data-result="error"]:not([data-expected="error"])')]
+      .map((card) => ({ id: card.dataset.sampleId, error: card.querySelector(".mgpt-status").textContent })),
+    dimensions: [...GPTMermaid.ui.uiState(document).records].filter((record) => record.result)
+      .map((record) => ({ id: record.figure.closest(".sample").dataset.sampleId, width: record.result.width, height: record.result.height })),
+  }));
+  assert.equal(stress.total, 101);
+  assert.equal(stress.ready, 100);
+  assert(stress.families >= 22);
+  assert.deepEqual(stress.unexpected, []);
+  const horizontalChain = stress.dimensions.find((item) => item.id === "stress-flow-lr-extreme-chain");
+  const verticalChain = stress.dimensions.find((item) => item.id === "stress-flow-td-long-chain");
+  assert(horizontalChain.width < 1250 && horizontalChain.height < 1000);
+  assert(verticalChain.width < 1200 && verticalChain.height < 1050);
+  const rawSizes = await page.evaluate(async () => {
+    const ids = ["stress-flow-lr-extreme-chain", "stress-flow-td-long-chain"];
+    const results = [];
+    for (const id of ids) {
+      const source = GPT_MERMAID_LAB_CASES.find((item) => item.id === id).source;
+      const result = await GPTMermaid.renderSvg(source, { adaptiveLayout: false });
+      results.push({ width: result.width, height: result.height });
+    }
+    return results;
+  });
+  assert(rawSizes[0].width > 6000 && rawSizes[1].height > 3000, "原布局对照丢失极端长宽输入");
+  await verifyLayoutQuality(page, path.join(output, "playwright", "layout-after"));
+  await fs.writeFile(path.join(output, "playwright", "stress-report.json"), JSON.stringify(stress, null, 2));
+  await page.locator("#family").selectOption("sequenceDiagram");
+  assert((await page.locator(".sample:visible").count()) >= 10);
+  await page.locator("#reset").click();
+  await page.locator("#search").fill("超宽");
+  assert((await page.locator(".sample:visible").count()) >= 8);
+  await page.locator("#reset").click();
+  await page.screenshot({ path: path.join(output, "playwright", "stress-lab.png") });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
   assert.deepEqual(errors, []);
   assert.deepEqual(external, []);
   console.log("gpt-mermaid E2E passed");

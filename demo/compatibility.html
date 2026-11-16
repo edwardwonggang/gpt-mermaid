@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>gpt-mermaid · 兼容性实验室</title>
+  <link rel="stylesheet" href="../dist/gpt-mermaid.css">
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: #202a35;
+      background: #f4f6f8;
+      font-synthesis: none;
+      text-rendering: optimizeLegibility;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    header, main { width: min(1280px, calc(100% - 40px)); margin-inline: auto; }
+    header { padding: 28px 0 20px; }
+    h1 { margin: 0; font-size: 26px; line-height: 1.2; }
+    .subtitle { margin: 7px 0 18px; color: #5d6977; font-size: 14px; }
+    .summary { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 20px; }
+    .count { color: #364454; font-size: 13px; font-variant-numeric: tabular-nums; }
+    .legend { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-left: auto; }
+    .legend span { display: inline-flex; align-items: center; gap: 6px; color: #43505e; font-size: 12px; }
+    .swatch { width: 18px; height: 3px; border-radius: 2px; }
+    .right { background: #2563eb; }
+    .down { background: #0f766e; }
+    .left { background: #c2410c; }
+    .up { background: #7c3aed; }
+    main { padding-bottom: 48px; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .sample { min-width: 0; overflow: hidden; border: 1px solid #cbd3dc; border-radius: 6px; background: #fff; }
+    .sample.wide { grid-column: 1 / -1; }
+    .sample-head { display: flex; align-items: baseline; gap: 9px; padding: 12px 14px 9px; border-bottom: 1px solid #e0e5eb; }
+    .sample-head h2 { margin: 0; font-size: 14px; line-height: 1.35; }
+    .kind { color: #687585; font: 11px/1.3 ui-monospace, "SFMono-Regular", Menlo, monospace; }
+    .result { margin-left: auto; color: #657180; font-size: 11px; white-space: nowrap; }
+    .sample[data-result="ready"] .result { color: #167246; }
+    .sample[data-result="error"] .result { color: #b42318; }
+    .canvas { min-height: 142px; padding: 10px 14px; overflow: auto; }
+    .canvas .mgpt-diagram { margin: 4px 0; }
+    .source { border-top: 1px solid #e0e5eb; }
+    .source summary { padding: 8px 14px; color: #596777; cursor: pointer; font-size: 12px; }
+    .source pre { margin: 0; max-height: 250px; padding: 10px 14px 14px; overflow: auto; background: #f7f8fa; }
+    .source code { font: 11px/1.6 ui-monospace, "SFMono-Regular", Menlo, monospace; white-space: pre; }
+    .canvas > pre { margin: 0; }
+    .error-note { color: #8f2f25; font-size: 12px; }
+    .controls { position: sticky; top: 0; z-index: 30; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px 0; background: #f4f6f8f5; border-block: 1px solid #cbd3dc; margin-top: 16px; }
+    .controls input, .controls select, .controls button, .sample-actions button { min-height: 34px; padding: 6px 10px; border: 1px solid #bbc7d4; border-radius: 5px; color: #273749; background: #fff; font: inherit; font-size: 12px; }
+    .controls input { flex: 1 1 260px; min-width: 140px; }
+    .controls button, .sample-actions button { cursor: pointer; }
+    .controls :focus-visible, .sample-actions button:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+    #visible-count { font-size: 12px; color: #4c5e72; }
+    .sample[hidden] { display: none; }
+    .sample { scroll-margin-top: 70px; }
+    .sample:target { outline: 3px solid #2563eb; outline-offset: 2px; }
+    .sample-head { flex-wrap: wrap; }
+    .sample-id { color: #5b6f84; font: 11px ui-monospace, monospace; text-decoration: none; }
+    .sample-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 14px; border-bottom: 1px solid #edf0f4; }
+    .sample-actions button { min-height: 26px; padding: 3px 8px; }
+    .dimensions { color: #617084; font: 11px ui-monospace, monospace; margin-left: auto; }
+    .layout-note { padding: 0 14px 8px; color: #617084; font-size: 11px; line-height: 1.5; }
+    .layout-note:empty { display: none; }
+    .sample[data-adaptive="applied"] .layout-note { color: #167246; }
+    .canvas { max-height: 920px; }
+    .canvas .mgpt-diagram[data-wide="true"] { width: 100%; max-width: 100%; margin-left: 0; transform: none; }
+    .guide { font-size: 12px; color: #516175; line-height: 1.65; }
+    progress { width: 100%; height: 5px; accent-color: #2563eb; }
+    @media (max-width: 760px) {
+      header, main { width: min(100% - 24px, 620px); }
+      header { padding-top: 22px; }
+      .grid { grid-template-columns: minmax(0, 1fr); }
+      .sample.wide { grid-column: auto; }
+      .legend { margin-left: 0; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>gpt-mermaid 兼容性实验室</h1>
+    <p class="subtitle">按结构选择代表样例，覆盖不同图种、尺寸边界与错误回退，不再把同一结构按四方向重复计数。</p>
+    <div class="summary">
+      <div class="count" id="summary" role="status">正在加载图表…</div>
+      <div class="legend" aria-label="连线方向颜色">
+        <span><i class="swatch right"></i>向右</span>
+        <span><i class="swatch down"></i>向下</span>
+        <span><i class="swatch left"></i>向左</span>
+        <span><i class="swatch up"></i>向上</span>
+      </div>
+    </div>
+    <p class="guide">长流程自动换行或换列折返；连续分支组只在唯一桥边处分段，组内关系保持完整。反馈环、跨层连接、子图与不可安全切分的分组保留原布局，每张图显示处理结果。可切换“上游原布局”作对照。原始尺寸用于滚动查看；全屏后滚轮缩放、拖动平移，页面内 Ctrl + 滚轮缩放。反馈时请附样例编号。预期错误样例不算渲染缺陷。</p>
+    <progress id="render-progress" value="0" max="1" aria-label="样例渲染进度"></progress>
+  </header>
+  <main>
+    <div class="controls">
+      <input id="search" type="search" aria-label="搜索测试样例" placeholder="搜索编号、图种、长英文、超宽、多分支…">
+      <select id="family" aria-label="筛选图种"><option value="">所有图种</option></select>
+      <select id="scope" aria-label="筛选样例组"><option value="">全部样例</option><option value="base">基础回归</option><option value="stress">扩展压力</option><option value="error">错误状态</option></select>
+      <select id="adaptive-layout" aria-label="选择长流程布局"><option value="auto">安全自动折返</option><option value="original">上游原布局</option></select>
+      <button id="reset" type="button">清除筛选</button>
+      <span id="visible-count"></span>
+    </div>
+    <div class="grid" id="samples"></div>
+  </main>
+  <script src="../dist/gpt-mermaid.umd.js"></script>
+  <script src="./stress-cases.js"></script>
+  <script>
+    const samples = [
+      {
+        id: "flow-minimal", type: "flowchart", title: "最小流程：两个节点", complexity: "简单",
+        source: `flowchart LR
+  Input[输入] --> Output[输出]`,
+      },
+      {
+        id: "flow-branch", type: "flowchart", title: "单次判断与两个出口", complexity: "基础",
+        source: `flowchart TD
+  A[提交申请] --> B{资料齐全?}
+  B -->|是| C[进入审批]
+  B -->|否| D[补全资料]`,
+      },
+      {
+        id: "flow-complex", type: "flowchart", title: "子图、多分支、虚线与反馈环", complexity: "复杂", wide: true,
+        source: `flowchart TD
+  subgraph Client[客户端]
+    A[提交请求] --> B{本地缓存命中?}
+  end
+  B -->|是| C[返回缓存]
+  B -->|否| D[请求模型网关]
+  D --> E{上游可用?}
+  E -->|是| F[流式响应]
+  E -->|否| G[指数退避]
+  G -. 重试 .-> D
+  G -->|超过预算| H[降级返回]
+  F --> I[记录用量]
+  H --> I`,
+      },
+      {
+        id: "flow-horizontal", type: "flowchart", title: "横向布局与多向回环", complexity: "复杂",
+        source: `flowchart LR
+  A[Request] --> B[Validate]
+  B --> C{Allowed?}
+  C -->|yes| D[Process]
+  C -->|no| E[Reject]
+  D --> F[Response]
+  E -. retry .-> B`,
+      },
+      {
+        id: "flow-shapes", type: "flowchart", title: "圆形、胶囊与特殊形状连接", complexity: "轮廓回归", wide: true,
+        source: `flowchart LR
+  A((Circle)) --> B([Stadium])
+  B --> C{Decision}
+  C --> D[/Input/]
+  D --> E[(Database)]
+  E --> F[[Subroutine]]
+  F --> G{{Hexagon}}
+  G --> A`,
+      },
+      {
+        id: "flow-both", type: "flowchart", title: "双向箭头、自环与无箭头连线", complexity: "端点回归",
+        source: `flowchart LR
+  A[Alpha] <--> B[Beta]
+  B <--> B
+  B --- C[Plain]`,
+      },
+      {
+        id: "state", type: "stateDiagram-v2", title: "状态图与长英文状态", complexity: "多状态",
+        source: `stateDiagram-v2
+  [*] --> INIT
+  INIT --> WAIT_FOR_UPSTREAM_ACKNOWLEDGEMENT: start
+  WAIT_FOR_UPSTREAM_ACKNOWLEDGEMENT --> DONE: accepted
+  WAIT_FOR_UPSTREAM_ACKNOWLEDGEMENT --> RETRY: timeout
+  RETRY --> WAIT_FOR_UPSTREAM_ACKNOWLEDGEMENT: backoff
+  DONE --> [*]`,
+      },
+      {
+        id: "sequence-self", type: "sequenceDiagram", title: "时序图、自调用与序号对齐", complexity: "端点回归",
+        source: `sequenceDiagram
+  autonumber
+  participant A as Alpha
+  participant B as Beta
+  A->>B: start
+  activate B
+  B->>B: nested
+  B-->>A: finish
+  deactivate B`,
+      },
+      {
+        id: "sequence", type: "sequenceDiagram", title: "时序图、往返消息与激活", complexity: "多参与者",
+        source: `sequenceDiagram
+  autonumber
+  participant U as Browser
+  participant G as Gateway
+  participant M as Model
+  U->>G: POST /responses
+  activate G
+  G->>M: stream request
+  M-->>G: delta
+  G-->>U: event stream
+  deactivate G`,
+      },
+      {
+        id: "class", type: "classDiagram", title: "类图与 UML 关系", complexity: "关系",
+        source: `classDiagram
+  class Client {
+    +String token
+    +send()
+  }
+  class Gateway
+  class Model
+  Gateway <|-- Client
+  Client ..> Gateway : calls
+  Gateway --> Model : routes`,
+      },
+      {
+        id: "er", type: "erDiagram", title: "ER 图与基数端点", complexity: "关系",
+        source: `erDiagram
+  CUSTOMER ||--o{ ORDER : places
+  ORDER ||--|{ ORDER_ITEM : contains
+  PRODUCT ||--o{ ORDER_ITEM : included`,
+      },
+      {
+        id: "er-attributes", type: "erDiagram", title: "ER 属性表与标题居中", complexity: "排版回归",
+        source: `erDiagram
+  USER {
+    int id PK
+    string email
+    string name
+  }
+  USER ||--o{ ORDER : places
+  ORDER {
+    int id PK
+    int userId FK
+  }`,
+      },
+      {
+        id: "gantt", type: "gantt", title: "甘特图与依赖任务", complexity: "时间线",
+        source: `gantt
+  title Release plan
+  dateFormat YYYY-MM-DD
+  section Build
+  Design :done, d1, 2026-01-01, 3d
+  Runtime :active, d2, after d1, 5d
+  section Verify
+  Browser QA : d3, after d2, 3d`,
+      },
+      {
+        id: "pie", type: "pie", title: "饼图与图例", complexity: "统计",
+        source: `pie showData
+  title Request distribution
+  "Chat" : 48
+  "Responses" : 32
+  "Other" : 20`,
+      },
+      {
+        id: "quadrant", type: "quadrantChart", title: "象限图与坐标文字", complexity: "坐标",
+        source: `quadrantChart
+  title Feature priorities
+  x-axis Low --> High
+  y-axis Low --> High
+  quadrant-1 Do first
+  quadrant-2 Plan
+  quadrant-3 Delegate
+  quadrant-4 Avoid
+  Feature A: [0.82, 0.76]
+  Feature B: [0.30, 0.22]
+  Feature C: [0.62, 0.38]`,
+      },
+      {
+        id: "xychart", type: "xychart-beta", title: "XY 图、柱线组合", complexity: "坐标",
+        source: `xychart-beta
+  title "Monthly requests"
+  x-axis [Jan, Feb, Mar, Apr]
+  y-axis 0 --> 100
+  bar [30, 50, 65, 82]
+  line [20, 42, 58, 75]`,
+      },
+      {
+        id: "git", type: "gitGraph", title: "Git 分支、提交与合并", complexity: "分支",
+        source: `gitGraph
+  commit id: "base"
+  branch feature
+  checkout feature
+  commit id: "work"
+  commit id: "test"
+  checkout main
+  commit id: "hotfix"
+  merge feature id: "release"`,
+      },
+      {
+        id: "journey", type: "journey", title: "用户旅程与评分", complexity: "阶段",
+        source: `journey
+  title Setup journey
+  section Configure
+    Open settings: 5: User
+    Create token: 3: User, Admin
+  section Verify
+    Send request: 4: User
+    Read response: 5: User`,
+      },
+      {
+        id: "mindmap", type: "mindmap", title: "思维导图与多层节点", complexity: "树形",
+        source: `mindmap
+  root((GPT Mermaid))
+    Browser
+      UMD
+      ESM
+    Renderer
+      ELK flowcharts
+      Native layout`,
+      },
+      {
+        id: "timeline", type: "timeline", title: "时间线与阶段事件", complexity: "时间线",
+        source: `timeline
+  title Project milestones
+  2024 : Prototype
+  2025 : Browser API
+  2026 : Compatibility pass`,
+      },
+      {
+        id: "requirement", type: "requirementDiagram", title: "需求图与验证关联", complexity: "追踪",
+        source: `requirementDiagram
+  requirement req1 {
+    id: 1
+    text: "Direction colors are visible"
+    risk: Low
+    verifymethod: Test
+  }
+  element test1 {
+    type: simulation
+  }
+  req1 - verifies -> test1`,
+      },
+      {
+        id: "error", type: "error fallback", title: "错误回退状态", complexity: "预期报错", expectedError: true,
+        source: `flowchart TD
+  A -->`,
+      },
+    ];
+
+    const query = new URLSearchParams(location.search);
+    const baseOnly = query.get("suite") === "base";
+    const adaptiveEnabled = query.get("layout") !== "original";
+    const layoutControl = document.getElementById("adaptive-layout");
+    layoutControl.value = adaptiveEnabled ? "auto" : "original";
+    layoutControl.addEventListener("change", () => {
+      if (layoutControl.value === "original") query.set("layout", "original");
+      else query.delete("layout");
+      location.search = query.toString();
+    });
+    const cases = samples.map((sample) => ({ ...sample, group: "base" }));
+    if (!baseOnly) cases.push(...(window.GPT_MERMAID_STRESS_CASES || []).map((sample) => ({ ...sample, group: "stress" })));
+    window.GPT_MERMAID_LAB_CASES = cases;
+    const container = document.getElementById("samples");
+    const cards = new Map();
+    const records = new Map();
+    const family = document.getElementById("family");
+    for (const type of [...new Set(cases.map((sample) => sample.type))].sort()) {
+      const option = document.createElement("option");
+      option.value = option.textContent = type;
+      family.append(option);
+    }
+    let sequence = 0;
+    for (const sample of cases) {
+      const card = document.createElement("section");
+      card.className = `sample${sample.wide ? " wide" : ""}`;
+      card.id = sample.id;
+      card.dataset.sampleId = sample.id;
+      card.dataset.expected = sample.expectedError ? "error" : "ready";
+      card.dataset.group = sample.group;
+      card.dataset.search = [sample.id, sample.type, sample.title, sample.complexity, ...(sample.tags || [])].join(" ").toLowerCase();
+      card.innerHTML = `<div class="sample-head"><a class="sample-id"></a><h2></h2><span class="kind"></span><span class="result">等待渲染</span></div><div class="sample-actions"><button type="button" data-size disabled>原始尺寸</button><button type="button" data-fullscreen disabled>全屏</button><span class="dimensions"></span></div><div class="layout-note"></div><div class="canvas"><div data-render-target></div></div><details class="source"><summary>查看 Mermaid 源码</summary><pre><code class="source-code"></code></pre></details>`;
+      const reference = card.querySelector(".sample-id");
+      reference.href = `#${sample.id}`;
+      reference.textContent = `#${String(++sequence).padStart(3, "0")} · ${sample.id}`;
+      card.querySelector("h2").textContent = sample.title;
+      card.querySelector(".kind").textContent = `${sample.type} · ${sample.complexity}`;
+      card.querySelector(".source-code").textContent = sample.source;
+      container.append(card);
+      cards.set(sample.id, card);
+    }
+
+    const search = document.getElementById("search");
+    const scope = document.getElementById("scope");
+    function filterCards() {
+      const words = search.value.toLowerCase().split(/\s+/).filter(Boolean);
+      let visible = 0;
+      for (const sample of cases) {
+        const card = cards.get(sample.id);
+        card.hidden = Boolean((family.value && sample.type !== family.value)
+          || (scope.value && (scope.value === "error" ? card.dataset.result !== "error" : sample.group !== scope.value))
+          || !words.every((word) => card.dataset.search.includes(word)));
+        if (!card.hidden) visible++;
+      }
+      document.getElementById("visible-count").textContent = `显示 ${visible} / ${cases.length} 张`;
+    }
+    search.addEventListener("input", filterCards);
+    family.addEventListener("change", filterCards);
+    scope.addEventListener("change", filterCards);
+    document.getElementById("reset").addEventListener("click", () => {
+      search.value = family.value = scope.value = "";
+      filterCards();
+    });
+    filterCards();
+    container.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-size],button[data-fullscreen]");
+      if (!button) return;
+      const card = button.closest(".sample");
+      const record = records.get(card.dataset.sampleId);
+      if (!record?.result) return;
+      if (button.hasAttribute("data-fullscreen")) return record.expand();
+      const natural = card.dataset.natural !== "true";
+      card.dataset.natural = String(natural);
+      record.config.fitMaxHeight = natural ? Infinity : 780;
+      record.stage.style.width = natural ? `${Math.max(record.result.width, card.querySelector(".canvas").clientWidth - 28)}px` : "100%";
+      record.fit();
+      button.textContent = natural ? "适应窗口" : "原始尺寸";
+    });
+    GPTMermaid.configure({
+      preset: "gpt", fitMaxHeight: 780,
+      adaptiveLayout: adaptiveEnabled ? { maxWidth: 1200, maxHeight: 1000, gap: 80 } : false,
+    });
+    const layoutReasons = {
+      disabled: "已关闭自动折返",
+      "within-threshold": "尺寸未超过折返阈值",
+      "cross-axis-overflow": "超出尺寸来自单层内容，折返无法缩小该方向",
+      "too-few-nodes": "少于两个节点",
+      "subgraph-layout": "包含子图，保持上游分组布局",
+      "cycle-or-feedback": "包含反馈环或自环",
+      "cross-layer-edge": "包含跨层连接",
+      "disconnected-components": "包含多个独立组件",
+      "no-safe-break": "没有相邻单节点之间的唯一切口",
+      "block-exceeds-threshold": "完整分支组超过阈值，不能拆开组内关系",
+      "non-monotonic-layout": "上游路由未保持连续层方向",
+    };
+    function showLayoutResult(card, result) {
+      const svg = new DOMParser().parseFromString(result.svg, "image/svg+xml").documentElement;
+      const status = svg.getAttribute("data-gptm-adaptive");
+      if (!status) return;
+      card.dataset.adaptive = status;
+      const reason = svg.getAttribute("data-gptm-adaptive-reason");
+      const rows = Number(svg.getAttribute("data-gptm-adaptive-rows")) || 1;
+      const columns = Number(svg.getAttribute("data-gptm-adaptive-columns")) || 1;
+      card.querySelector(".layout-note").textContent = status === "applied"
+        ? `已按流程顺序折返为 ${rows > 1 ? `${rows} 行` : `${columns} 列`}，节点与边的归属保持不变`
+        : `保留原布局：${layoutReasons[reason] || "缺少可证明安全的结构或几何信息"}`;
+    }
+    async function renderCases() {
+      let ready = 0;
+      let errors = 0;
+      const progress = document.getElementById("render-progress");
+      progress.max = cases.length;
+      for (const sample of cases) {
+        const card = cards.get(sample.id);
+        card.querySelector(".result").textContent = "正在渲染";
+        const record = await GPTMermaid.mount(card.querySelector("[data-render-target]"), sample.source);
+        await new Promise((resolve) => {
+          const done = () => ["ready", "error"].includes(record.figure.dataset.state);
+          if (done()) return resolve();
+          const observer = new MutationObserver(() => {
+            if (done()) { observer.disconnect(); resolve(); }
+          });
+          observer.observe(record.figure, { attributes: true, attributeFilter: ["data-state"] });
+        });
+        records.set(sample.id, record);
+        const succeeded = record.figure.dataset.state === "ready";
+        card.dataset.result = succeeded ? "ready" : "error";
+        card.querySelector(".result").textContent = succeeded ? "渲染成功" : "渲染失败";
+        if (succeeded) ready++;
+        else errors++;
+        if (card.dataset.expected === "error" && !succeeded) {
+          card.querySelector(".result").textContent = "错误回退正常";
+        }
+        if (succeeded) {
+          card.querySelector("[data-size]").disabled = card.querySelector("[data-fullscreen]").disabled = false;
+          card.querySelector(".dimensions").textContent = `${Math.round(record.result.width)} × ${Math.round(record.result.height)} SVG`;
+          showLayoutResult(card, record.result);
+        }
+        progress.value = ready + errors;
+        document.getElementById("summary").textContent = `${ready} 张渲染成功 · ${errors} 张进入错误状态 · ${ready + errors} / ${cases.length} 张已检查`;
+        if (scope.value === "error") filterCards();
+        if (location.hash === `#${sample.id}`) card.scrollIntoView();
+        await new Promise(requestAnimationFrame);
+      }
+      document.body.dataset.labReady = "true";
+    }
+    renderCases().catch((error) => {
+      document.getElementById("summary").textContent = `兼容性检查失败：${error.message}`;
+    });
+  </script>
+</body>
+</html>

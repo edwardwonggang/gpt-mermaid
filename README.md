@@ -6,7 +6,7 @@
 
 **ChatGPT-style Mermaid for any HTML page.**
 
-`gpt-mermaid` is a complete browser renderer and UI layer for Mermaid. It combines a patched Mermaid 12.3.0 runtime with ELK layout, rounded self-sized nodes, soft GPT colors, a floating action menu, zoom/pan, fullscreen viewing, SVG download and high-resolution PNG copy.
+`gpt-mermaid` is a complete browser renderer and UI layer for Mermaid. It combines a patched Mermaid 12.3.0 runtime with ELK flowchart layout, rounded self-sized nodes, direction-colored connectors, tall filled triangle arrows, a floating action menu, zoom/pan, fullscreen viewing, SVG download and high-resolution PNG copy.
 
 The default preset is **GPT**. The UMD build exposes the browser global `GPTMermaid`.
 
@@ -21,10 +21,15 @@ Plain Mermaid is powerful, but its default flowchart decisions are large diamond
 - decision diamonds become rounded rectangles that grow with their text;
 - ordinary rectangles get a consistent radius and tighter padding;
 - ELK layered layout is used for complex diagrams;
-- the `gpt` preset uses low-saturation blue nodes, soft borders and open arrows;
+- the `gpt` preset uses blue nodes, stronger borders and distinct connector colors for right, down, left and up directions;
+- directional arrows share a 10:8 height-to-base ratio (height is measured along the arrow direction); their tips meet actual node contours. ER cardinalities, UML diamonds and lollipops retain their native shapes;
 - the inline viewer has no permanent gray toolbar;
 - hover the diagram to reveal the `⋯` menu and fullscreen button;
 - copy source, copy a high-resolution PNG, download SVG, zoom, pan and open fullscreen.
+- scroll normally to zoom in the fullscreen viewer; inline diagrams use `Ctrl + wheel` so ordinary scrolling keeps moving the page.
+- 长链和连续分支组支持自动“贪吃蛇”折返；边标签贴合连线，拥挤端口、自环和 C4 可读性统一校准。
+
+兼容性页面位于 `demo/compatibility.html`：101 个去重样例、22 种图表，提供自动折返与原布局对照。复杂反馈、跨层边和嵌套子图保留原布局，页面会显示原因。
 
 ## Quick start
 
@@ -129,6 +134,7 @@ GPTMermaid.configure({
   autoInjectStyles: true,
   maxInlineWidth: 740,
   fitMaxHeight: Infinity,
+  adaptiveLayout: { enabled: true, maxWidth: 1200, maxHeight: 1000, gap: 80 },
   themeVariables: {
     primaryColor: "#e5f3ff"
   }
@@ -173,6 +179,7 @@ npm run test:all
 - Mermaid runtime: 12.3.0, bundled as `dist/gpt-mermaid.runtime.min.js`.
 - Browsers: modern Chromium, Firefox and Safari with `<dialog>`, `ResizeObserver`, `ClipboardItem` and `createImageBitmap` where the corresponding action is used.
 - The wrapper itself has no framework dependency.
+- Open [`demo/compatibility.html`](./demo/compatibility.html) to inspect simple-to-complex examples across common diagram types, including expected error fallback.
 - The legacy patch scripts and old demos remain available under [docs/legacy-patch.md](./docs/legacy-patch.md) and `demo/legacy.html`.
 
 ## Project layout

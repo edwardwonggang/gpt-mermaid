@@ -1,6 +1,6 @@
 {
   "name": "gpt-mermaid",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Independent, unofficial ChatGPT-style Mermaid renderer with rounded nodes, self-sized decision boxes and a complete browser API.",
   "type": "module",
   "main": "./dist/gpt-mermaid.cjs",
@@ -37,6 +37,8 @@
     "LICENSES",
     "docs",
     "demo/index.html",
+    "demo/compatibility.html",
+    "demo/stress-cases.js",
     "demo/preview.png",
     "scripts/build.mjs",
     "scripts/serve.mjs",
@@ -59,7 +61,7 @@
     "build:runtime": "node scripts/apply-patch.mjs",
     "check": "node --check dist/gpt-mermaid.umd.js && node --check dist/gpt-mermaid.esm.js && node --check dist/gpt-mermaid.cjs",
     "serve": "node scripts/serve.mjs",
-    "test": "node --test test/unit.test.mjs",
+    "test": "node --test test/*.test.mjs",
     "test:e2e": "node test/e2e.mjs",
     "test:all": "npm run build && npm run check && npm test && npm run test:e2e"
   },

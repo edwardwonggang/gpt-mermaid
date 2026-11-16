@@ -11,7 +11,7 @@ const SVG_TAGS = new Set((
   "linearGradient radialGradient stop clipPath mask filter feBlend feColorMatrix feComponentTransfer feComposite " +
   "feConvolveMatrix feDiffuseLighting feDisplacementMap feDistantLight feDropShadow feFlood feFuncA feFuncB feFuncG " +
   "feFuncR feGaussianBlur feMerge feMergeNode feMorphology feOffset fePointLight feSpecularLighting feSpotLight " +
-  "feTile feTurbulence style image use"
+  "feTile feTurbulence style image use switch"
 ).split(" "));
 const DENY_TAGS = new Set(["script", "iframe", "object", "embed", "form", "input", "button", "textarea", "foreignObject", "image", "animate", "animateMotion", "animateTransform", "set"]);
 
