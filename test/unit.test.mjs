@@ -9,7 +9,7 @@ test("exports a standard ES module API", () => {
   assert.equal(typeof GPTMermaid.renderAll, "function");
   assert.equal(typeof GPTMermaid.configure, "function");
   assert.equal(typeof GPTMermaid.mount, "function");
-  assert.equal(GPTMermaid.version, "1.0.0");
+  assert.equal(GPTMermaid.version, "1.0.1");
 });
 
 test("sanitizes unsafe Mermaid configuration and clicks", () => {

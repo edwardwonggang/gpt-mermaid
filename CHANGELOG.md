@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.1 — 2026-11-16
+
+### Fixed
+
+- State-diagram labels no longer inherit a hard-coded `translate(-60, …)`; node text is centered with `text-anchor="middle"`.
+- `WAIT_CONDITION` and other English state names remain on one line by using a state-specific wrapping width.
+- GPT preset node borders, transitions and edge-label strokes are darker and use a 1.2px stroke.
+
 ## 1.0.0 — 2026-11-14
 
 ### Added

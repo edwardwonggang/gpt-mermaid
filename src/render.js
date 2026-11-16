@@ -37,6 +37,25 @@ function postProcessSvg(svgMarkup, variables) {
     }
   }
 
+  // Mermaid 的 state 节点用外框宽度做布局，但 label group 仍可能保留
+  // wrappingWidth/2 的硬编码水平位移。把直接 label 的水平位移归零，并用
+  // text-anchor=middle 让 SVG 文本以节点中心为锚点，避免英文被推到框外。
+  for (const node of svg.querySelectorAll("g.node")) {
+    const label = node.querySelector(":scope > g.label");
+    if (!label) continue;
+    const transform = label.getAttribute("transform") || "";
+    const match = transform.match(/translate\(\s*([-+]?\d*\.?\d+)(?:[,\s]+([-+]?\d*\.?\d+))?\s*\)/);
+    if (match && Math.abs(Number(match[1])) > 0.01) {
+      label.setAttribute("transform", `translate(0, ${match[2] || "0"})`);
+    }
+    for (const text of label.querySelectorAll("text")) {
+      text.setAttribute("text-anchor", "middle");
+      for (const tspan of text.querySelectorAll("tspan")) {
+        if (tspan.hasAttribute("x")) tspan.setAttribute("x", "0");
+      }
+    }
+  }
+
   // 边标签：与 ChatGPT 一样使用无框大圆角胶囊。
   for (const labelGroup of svg.querySelectorAll("g.edgeLabel g.label")) {
     const rect = labelGroup.querySelector("rect.background");
@@ -187,7 +206,9 @@ export function createRenderer(baseUrl = document.baseURI) {
       gantt: { useMaxWidth: false },
       journey: { useMaxWidth: false },
       class: { useMaxWidth: false },
-      state: { useMaxWidth: false },
+      // 状态图默认 wrappingWidth 约 120，会把 WAIT_CONDITION 这类状态名
+      // 强行拆行；放宽到 360 后由节点宽度自然决定是否换行。
+      state: { useMaxWidth: false, wrappingWidth: 360 },
       er: { useMaxWidth: false },
       pie: { useMaxWidth: false },
       quadrantChart: { useMaxWidth: false },

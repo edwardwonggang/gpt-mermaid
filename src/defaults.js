@@ -1,14 +1,14 @@
 /* 职责：主题变量、CSS 片段与配置归一化；不访问 DOM。 */
 
-export const VERSION = "1.0.0";
+export const VERSION = "1.0.1";
 
 export const PRESETS = Object.freeze({
   gpt: Object.freeze({
     node: "#e5f3ff",
     decision: "#f5faff",
     text: "#004f99",
-    line: "#cedbe5",
-    border: "rgba(0, 0, 0, 0.1)",
+    line: "#9fb8ce",
+    border: "#8bb9e0",
     label: "#f5faff",
   }),
   github: Object.freeze({
@@ -161,20 +161,20 @@ export function buildFlowchartThemeCSS(vars) {
 .node text { font-size: 14px; font-weight: 600; letter-spacing: normal; fill: ${vars.flowchartTextColor}; }
 .edgeLabels text { font-size: 13px; font-weight: 600; letter-spacing: -0.08px; fill: ${vars.flowchartTextColor}; }
 .node tspan[font-weight="normal"], .edgeLabels tspan[font-weight="normal"] { font-weight: 600; }
-.edgeLabel .label rect { opacity: 1; rx: 13px; ry: 13px; fill: ${vars.flowchartEdgeLabelColor}; stroke: ${vars.flowchartEdgeLabelBorderColor}; stroke-width: 1px; }
-.node rect, .node circle, .node ellipse, .node polygon, .node path { fill: ${vars.flowchartNodeColor}; stroke: ${vars.flowchartNodeBorderColor}; stroke-width: 1px; }
+.edgeLabel .label rect { opacity: 1; rx: 13px; ry: 13px; fill: ${vars.flowchartEdgeLabelColor}; stroke: ${vars.flowchartEdgeLabelBorderColor}; stroke-width: 1.2px; }
+.node rect, .node circle, .node ellipse, .node polygon, .node path { fill: ${vars.flowchartNodeColor}; stroke: ${vars.flowchartNodeBorderColor}; stroke-width: 1.2px; }
 .node rect { rx: 16px; ry: 16px; }
 .node.default.mermaid-decision .label-container, .mermaid-decision .label-container { fill: ${vars.flowchartDecisionColor}; stroke: ${vars.flowchartLineColor}; stroke-dasharray: 2 2; }
 .cluster rect { rx: 16px; ry: 16px; fill: ${vars.clusterBkg}; stroke: ${vars.clusterBorder}; stroke-width: 1px; }
 .cluster-label text, .cluster-label tspan { font-size: 13px; font-weight: 600; fill: ${vars.textColor}; }
-.edgePaths .flowchart-link { stroke: ${vars.flowchartLineColor}; stroke-width: 1px; stroke-linecap: round; stroke-linejoin: round; }
+.edgePaths .flowchart-link { stroke: ${vars.flowchartLineColor}; stroke-width: 1.2px; stroke-linecap: round; stroke-linejoin: round; }
 .marker { fill: ${vars.flowchartLineColor}; stroke: ${vars.flowchartLineColor}; }
 `;
 }
 
 export function buildGlobalThemeCSS(vars) {
   return `
-.node rect, .node circle, .node ellipse, .node polygon, .node path { fill: ${vars.flowchartNodeColor}; stroke: ${vars.flowchartNodeBorderColor}; stroke-width: 1px; }
+.node rect, .node circle, .node ellipse, .node polygon, .node path { fill: ${vars.flowchartNodeColor}; stroke: ${vars.flowchartNodeBorderColor}; stroke-width: 1.2px; }
 .node rect { rx: 12px; ry: 12px; }
 .node text, .node tspan { fill: ${vars.flowchartTextColor}; font-size: 14px; font-weight: 600; }
 rect.actor, rect.actor-top, rect.actor-bottom { fill: ${vars.actorBkg}; stroke: ${vars.actorBorder}; stroke-width: 1px; rx: 12px; ry: 12px; }
@@ -182,15 +182,15 @@ text.actor, text.actor > tspan { fill: ${vars.actorTextColor}; font-size: 14px; 
 .actor-line { stroke: ${vars.actorLineColor}; stroke-width: 1px; }
 .messageLine0, .messageLine1 { stroke: ${vars.signalColor}; stroke-width: 1.2px; }
 .messageText { fill: ${vars.signalTextColor}; font-size: 13px; font-weight: 500; }
-.statediagram-state rect.basic.label-container { fill: ${vars.flowchartNodeColor}; stroke: ${vars.flowchartNodeBorderColor}; stroke-width: 1px; rx: 14px; ry: 14px; }
+.statediagram-state rect.basic.label-container { fill: ${vars.flowchartNodeColor}; stroke: ${vars.flowchartNodeBorderColor}; stroke-width: 1.2px; rx: 14px; ry: 14px; }
 .statediagram-state text, .statediagram-state tspan { fill: ${vars.flowchartTextColor}; font-size: 14px; font-weight: 600; }
-.transition { stroke: ${vars.flowchartLineColor}; stroke-width: 1px; }
+.transition { stroke: ${vars.flowchartLineColor}; stroke-width: 1.2px; }
 g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke: ${vars.flowchartNodeBorderColor}; }
-.node .outer-path path { stroke: ${vars.flowchartNodeBorderColor}; stroke-width: 1px; }
-.divider path { stroke: ${vars.flowchartLineColor}; stroke-width: 1px; }
+.node .outer-path path { stroke: ${vars.flowchartNodeBorderColor}; stroke-width: 1.2px; }
+.divider path { stroke: ${vars.flowchartLineColor}; stroke-width: 1.2px; }
 .entityBox { fill: ${vars.flowchartNodeColor}; stroke: ${vars.flowchartNodeBorderColor}; rx: 10px; ry: 10px; }
-.relationshipLine { stroke: ${vars.flowchartLineColor}; stroke-width: 1px; }
-.edgeLabel .label rect, .edgeLabel rect.labelBkg { opacity: 1; rx: 13px; ry: 13px; fill: ${vars.flowchartEdgeLabelColor}; stroke: ${vars.flowchartEdgeLabelBorderColor}; stroke-width: 1px; }
+.relationshipLine { stroke: ${vars.flowchartLineColor}; stroke-width: 1.2px; }
+.edgeLabel .label rect, .edgeLabel rect.labelBkg { opacity: 1; rx: 13px; ry: 13px; fill: ${vars.flowchartEdgeLabelColor}; stroke: ${vars.flowchartEdgeLabelBorderColor}; stroke-width: 1.2px; }
 .edgeLabel text, .edgeLabel tspan { fill: ${vars.flowchartTextColor}; font-size: 13px; font-weight: 600; }
 .note { fill: ${vars.noteBkgColor}; stroke: ${vars.noteBorderColor}; rx: 10px; ry: 10px; }
 .noteText, .noteText > tspan { fill: ${vars.noteTextColor}; font-size: 13px; }

@@ -42,7 +42,7 @@ try {
     if (/^https?:/.test(url) && !url.startsWith(`http://127.0.0.1:${PORT}`)) external.push(url);
   });
   await page.goto(`http://127.0.0.1:${PORT}/demo/index.html`, { waitUntil: "domcontentloaded" });
-  await page.waitForFunction(() => window.GPTMermaid?.version === "1.0.0");
+  await page.waitForFunction(() => window.GPTMermaid?.version === "1.0.1");
   const diagrams = page.locator(".mgpt-diagram");
   await page.waitForFunction(() => [...document.querySelectorAll(".mgpt-diagram")].every((el) => ["ready", "error"].includes(el.dataset.state)), null, { timeout: 30000 });
   assert.equal(await diagrams.count(), 3);
@@ -66,6 +66,29 @@ try {
     const safeSvg = GPTMermaid.sanitizeSvg(
       '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><image href="https://evil.invalid/x.png"/><text>safe</text></svg>'
     );
+    const stateResult = await GPTMermaid.renderSvg(
+      "stateDiagram-v2\n[*] --> INIT\nINIT --> DISABLED : 使能关闭\nDISABLED --> WAIT_CONDITION : 开启命令保存成功"
+    );
+    const stateHost = document.createElement("div");
+    stateHost.innerHTML = stateResult.svg;
+    document.body.append(stateHost);
+    const stateNode = [...stateHost.querySelectorAll("g.node")].find((node) => node.textContent.includes("WAIT_CONDITION"));
+    const stateText = stateNode?.querySelector("text");
+    const stateRect = stateNode?.querySelector("rect.basic.label-container");
+    const stateLabel = stateNode?.querySelector(":scope > g.label");
+    const stateRectBox = stateRect?.getBoundingClientRect();
+    const stateTextBox = stateText?.getBoundingClientRect();
+    const stateGeometry = {
+      labelTransform: stateLabel?.getAttribute("transform") || "",
+      anchor: stateText?.getAttribute("text-anchor") || "",
+      rows: stateText?.querySelectorAll(".text-outer-tspan").length || 0,
+      centerDelta: stateRectBox && stateTextBox
+        ? Math.abs((stateRectBox.left + stateRectBox.width / 2) - (stateTextBox.left + stateTextBox.width / 2))
+        : Infinity,
+      border: stateRect ? getComputedStyle(stateRect).stroke : "",
+      borderWidth: stateRect ? getComputedStyle(stateRect).strokeWidth : "",
+    };
+    stateHost.remove();
     return {
       width: result.width,
       height: result.height,
@@ -73,6 +96,7 @@ try {
       controller: ["destroy", "fit", "zoomIn", "zoomOut", "download", "copySource", "copyImage", "expand"].every((key) => typeof diagram[key] === "function"),
       extras: extras.map((item) => item.svg.length > 1000),
       safeSvg,
+      stateGeometry,
     };
   });
   assert(programmatic.width > 0 && programmatic.height > 0);
@@ -81,6 +105,12 @@ try {
   assert.deepEqual(programmatic.extras, [true, true, true, true]);
   assert.doesNotMatch(programmatic.safeSvg, /script|evil\.invalid|<image/i);
   assert.match(programmatic.safeSvg, /safe/);
+  assert.match(programmatic.stateGeometry.labelTransform, /^translate\(0[, ]/);
+  assert.equal(programmatic.stateGeometry.anchor, "middle");
+  assert.equal(programmatic.stateGeometry.rows, 1);
+  assert(programmatic.stateGeometry.centerDelta < 1, JSON.stringify(programmatic.stateGeometry));
+  assert.equal(programmatic.stateGeometry.border, "rgb(139, 185, 224)");
+  assert.equal(programmatic.stateGeometry.borderWidth, "1.2px");
 
   const first = diagrams.first();
   await first.hover();

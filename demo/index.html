@@ -54,7 +54,7 @@
 </head>
 <body>
   <header>
-    <div class="eyebrow">gpt-mermaid 1.0</div>
+    <div class="eyebrow">gpt-mermaid 1.0.1</div>
     <h1>ChatGPT-style Mermaid.<br>One script. Any page.</h1>
     <p class="lead">A complete browser renderer with ELK layout, rounded self-sized nodes, soft GPT colors, floating actions, zoom, pan, SVG download and high-resolution PNG copy.</p>
     <div class="actions">
@@ -101,12 +101,14 @@
       <div class="badge">State · no extra setup</div>
       <h2>Task state machine</h2>
       <pre><code class="language-mermaid">stateDiagram-v2
-  [*] --> 待处理
-  待处理 --> 调度中 : 提交任务
-  调度中 --> 运行中 : 分配成功
-  运行中 --> 已完成 : 正常退出
-  运行中 --> 失败重试 : 上游超时
-  失败重试 --> 调度中 : 未达上限</code></pre>
+  [*] --> INIT
+  INIT --> DISABLED : 使能关闭
+  DISABLED --> INIT : 使能开启
+  DISABLED --> WAIT_CONDITION : 开启命令保存成功
+  WAIT_CONDITION --> POS_MEASURE : 检测条件满足且周期到达
+  POS_MEASURE --> NEG_MEASURE : 正母线测量完成
+  NEG_MEASURE --> RESULT : 负母线测量完成
+  NEG_MEASURE --> ABORT : 关闭/异常/超时</code></pre>
     </article>
   </main>
   <footer>
