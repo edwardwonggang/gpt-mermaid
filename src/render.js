@@ -7,6 +7,7 @@ import { trimArrowShafts } from "./svg-shaft.js";
 import { routeFlowEdges, routeNativeEdges, nodeShape, fitSvgBounds } from "./svg-routing.js";
 import { routeC4Edges } from "./svg-c4.js";
 import { applyAdaptiveFlowLayout } from "./svg-adaptive.js";
+import { resolveEdgeCrossings, recordCrossings } from "./svg-crossings.js";
 
 const FLOWCHART_RE = /^\s*(?:flowchart|graph)\b/im;
 
@@ -521,11 +522,13 @@ function postProcessSvg(svgMarkup, variables, graph, config = {}) {
     repairEdgeConnections(live);
     repairSequenceConnections(live);
     placeEdgeLabels(live);
+    resolveEdgeCrossings(live, repairEdgeConnections);
     if (graph || Number(live.getAttribute("data-gptm-native-routes")) > 0) fitSvgBounds(live);
     colorDirectionalEdges(live, variables);
     const shafts = trimArrowShafts(live);
     live.setAttribute("data-gptm-trimmed-shafts", String(shafts.trimmed));
     live.setAttribute("data-gptm-shaft-skips", String(shafts.skipped.length));
+    recordCrossings(live);
     return new XMLSerializer().serializeToString(live);
   });
   return measured || new XMLSerializer().serializeToString(svg);
@@ -665,11 +668,20 @@ export function createRenderer(baseUrl = document.baseURI) {
       const processed = postProcessSvg(svg, config.themeVariables, graph, config);
       const clean = sanitizeSvgMarkup(processed);
       const size = svgSize(clean);
+      const root = new DOMParser().parseFromString(clean, "image/svg+xml").documentElement;
       return {
         svg: clean,
         width: size.width,
         height: size.height,
         source,
+        routing: {
+          status: root.getAttribute("data-gptm-routing-status") || "not-applicable",
+          checkedEdges: Number(root.getAttribute("data-gptm-checked-edges")) || 0,
+          crossings: Number(root.getAttribute("data-gptm-crossings")) || 0,
+          crossingsBefore: Number(root.getAttribute("data-gptm-crossings-before")) || 0,
+          spacingFactor: Number(root.getAttribute("data-gptm-spacing-factor")) || 1,
+          reason: root.getAttribute("data-gptm-routing-reason") || "",
+        },
       };
     });
     renderChain = task.then(() => undefined, () => undefined);

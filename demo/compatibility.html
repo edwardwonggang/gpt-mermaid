@@ -39,6 +39,7 @@
     .result { margin-left: auto; color: #657180; font-size: 11px; white-space: nowrap; }
     .sample[data-result="ready"] .result { color: #167246; }
     .sample[data-result="error"] .result { color: #b42318; }
+    .sample[data-routing="unresolved"] .result { color: #a34413; }
     .canvas { min-height: 142px; padding: 10px 14px; overflow: auto; }
     .canvas .mgpt-diagram { margin: 4px 0; }
     .source { border-top: 1px solid #e0e5eb; }
@@ -437,14 +438,24 @@
     function showLayoutResult(card, result) {
       const svg = new DOMParser().parseFromString(result.svg, "image/svg+xml").documentElement;
       const status = svg.getAttribute("data-gptm-adaptive");
-      if (!status) return;
+      const routing = result.routing;
+      const notes = [];
+      if (routing?.checkedEdges) {
+        card.dataset.routing = routing.status;
+        notes.push(routing.status === "clear" ? `已检查 ${routing.checkedEdges} 条连线，未检测到交叉`
+          : `仍有 ${routing.crossings} 对连线交叉，自动避障尚未解决`);
+        if (routing.status === "unresolved") card.querySelector(".result").textContent = "需检查连线";
+        if (routing.spacingFactor > 1) notes.push(`节点间距已自适应扩大 ${routing.spacingFactor} 倍`);
+      }
+      if (!status) { card.querySelector(".layout-note").textContent = notes.join(" · "); return; }
       card.dataset.adaptive = status;
       const reason = svg.getAttribute("data-gptm-adaptive-reason");
       const rows = Number(svg.getAttribute("data-gptm-adaptive-rows")) || 1;
       const columns = Number(svg.getAttribute("data-gptm-adaptive-columns")) || 1;
-      card.querySelector(".layout-note").textContent = status === "applied"
+      notes.push(status === "applied"
         ? `已按流程顺序折返为 ${rows > 1 ? `${rows} 行` : `${columns} 列`}，节点与边的归属保持不变`
-        : `保留原布局：${layoutReasons[reason] || "缺少可证明安全的结构或几何信息"}`;
+        : `保留原布局：${layoutReasons[reason] || "缺少可证明安全的结构或几何信息"}`);
+      card.querySelector(".layout-note").textContent = notes.join(" · ");
     }
     async function renderCases() {
       let ready = 0;

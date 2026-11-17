@@ -94,7 +94,7 @@ GPTMermaid.configure({
 | Method | Description |
 | --- | --- |
 | `configure(options)` | Merge global options and return the effective config. |
-| `renderSvg(source, options)` | Render to `{ svg, width, height, source }` without mounting UI. |
+| `renderSvg(source, options)` | 返回 `{ svg, width, height, source, routing }`，不挂载界面。 |
 | `mount(target, source, options)` | Mount a diagram into an element or selector. |
 | `render(source, options)` | Mount into `options.target`, or append a new figure to `body`. |
 | `renderAll(root, options)` | Render all `pre > code.language-mermaid` and `[data-gpt-mermaid-source]` nodes. |
@@ -102,6 +102,27 @@ GPTMermaid.configure({
 | `destroy(diagram)` | Release the blob URL, observers and DOM of a mounted diagram. |
 | `sanitizeSource(source)` | Validate and sanitize Mermaid source before rendering. |
 | `sanitizeSvg(svg)` | Apply the built-in SVG allowlist. |
+
+### 连线交叉检测与自动避障
+
+流程图、状态图、类图、ER 和 C4 的连线在最终 SVG 上检测交叉。算法优先保留正常路径，
+对有明确端点身份的冲突边尝试避开节点、其它连线、箭头和标签；再尝试整组通道调整及有限间距扩张。
+文字和节点本身不缩放，连接关系不改变。共享汇入仅豁免连续重合的目标末段。
+
+```js
+const result = await GPTMermaid.renderSvg(source);
+console.log(result.routing);
+// { status, checkedEdges, crossings, crossingsBefore, spacingFactor, reason }
+```
+
+`status` 为 `clear`（已检查的关系线未发现交叉）、`unresolved`（仍有残留）或
+`not-applicable`（该图没有本检测器支持的关系线）。`crossings` 按相交边对计数。
+`reason` 区分 `fixed-obstacles`、`search-budget` 和 `non-planar-edge-bound`。
+渲染成功不表示没有交叉，兼容页会独立显示这项结果。
+
+自动避障有确定的计算上限，不保证任意输入都能零交叉。含簇/组合节点和非三角语义端点的图
+不会自动扩间距；特殊端点的偏移和切线保持原契约。过密关系的拓扑可能本身不能在平面无交叉表示，
+此时保留关系并报告残留，不能靠删除边或隐藏交点假报通过。当前样例范围见 `docs/rendering-verification.md`。
 
 ### Direct container
 

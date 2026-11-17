@@ -36,6 +36,8 @@ Blob URL → <img> → zoom/pan/fullscreen UI
 8. `src/svg-routing.js`：端口间距、短折弯、自环、共享汇入和正交避障；保留逻辑边及身份。
 9. `src/svg-c4.js`：C4 关系映射与非目标节点、边界标题避障。
 10. `src/svg-shaft.js`：按三角底部裁切线杆，保留虚线相位；共享末端也继承主箭头深度。
+11. `src/path-intersections.js`：纯几何线段穿越、接触与重叠判定。
+12. `src/svg-crossings.js`：读取最终路径命令，细分曲线并检测边对交叉；有界避障、整组调整、间距重试及结果报告。
 
 The runtime is intentionally loaded lazily. A page that never renders a Mermaid
 diagram does not pay the 5.4 MB runtime cost.
@@ -51,5 +53,8 @@ diagram does not pay the 5.4 MB runtime cost.
 - Arrow height is measured from base midpoint to tip, along its direction. Every triangle uses the same 10:8 geometry and scales uniformly.
 - Layout `data-points` identifies connection anchors; browser `isPointInFill()` identifies actual contour intersections. A bounding box alone does not prove contact.
 - 流程节点归属使用 `db.getData().nodes/edges`，不解析 ID 子串或匹配标签文字；边重排后再次验证非目标节点碰撞。
-- 后处理顺序：文字校准 → 可选折返 → 路由整理 → 真实轮廓贴边 → 标签投影 → 画布尺寸 → 方向色和箭头 → 线杆裁切。
+- 后处理顺序：文字校准 → 可选折返 → 路由整理 → 真实轮廓贴边 → 标签投影 → 通用交叉避障与必要贴边复核 → 画布尺寸 → 方向色和箭头 → 线杆裁切 → 最终交叉报告。
 - 折返不改图源、不镜像文字。反馈、跨层和子图等无安全切口的情况明确保留原布局。
+- 不以图名、节点文字或源码关键词选择避障分支。原路径可用时保留；候选必须检查完整路径的自交、重走、长度及折弯。
+- 已放标签立即移动实际DOM，下一条边必须读取新位置。特殊端点留白和首尾切线不可随正交端口投影丢失。
+- 零交叉结果只覆盖被检测的关系线，`not-applicable` 与 `unresolved` 不可当作 `clear`。有限搜索的失败不是图不可平面化的证明。

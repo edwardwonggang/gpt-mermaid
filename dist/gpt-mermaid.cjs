@@ -362,6 +362,37 @@ var init_sanitize = __esm({
   }
 });
 
+// src/path-intersections.js
+function segmentIntersection(a, b, c, d) {
+  const v = delta(a, b), w = delta(c, d), offset = delta(a, c);
+  const determinant = cross(v, w), length2 = v.x * v.x + v.y * v.y;
+  if (length2 < EPS || w.x * w.x + w.y * w.y < EPS) return null;
+  if (Math.abs(determinant) < EPS) {
+    if (Math.abs(cross(offset, v)) > EPS * Math.sqrt(length2)) return null;
+    const project = (p) => ((p.x - a.x) * v.x + (p.y - a.y) * v.y) / length2;
+    const t0 = project(c), t1 = project(d);
+    const lo = Math.max(0, Math.min(t0, t1)), hi = Math.min(1, Math.max(t0, t1));
+    if (lo > hi + EPS) return null;
+    const t2 = (lo + hi) / 2;
+    return { x: a.x + t2 * v.x, y: a.y + t2 * v.y, kind: hi - lo > EPS ? "overlap" : "touch" };
+  }
+  const t = cross(offset, w) / determinant, u = cross(offset, v) / determinant;
+  if (t < -EPS || t > 1 + EPS || u < -EPS || u > 1 + EPS) return null;
+  return {
+    x: a.x + t * v.x,
+    y: a.y + t * v.y,
+    kind: t > EPS && t < 1 - EPS && u > EPS && u < 1 - EPS ? "cross" : "touch"
+  };
+}
+var EPS, cross, delta;
+var init_path_intersections = __esm({
+  "src/path-intersections.js"() {
+    EPS = 1e-7;
+    cross = (a, b) => a.x * b.y - a.y * b.x;
+    delta = (a, b) => ({ x: b.x - a.x, y: b.y - a.y });
+  }
+});
+
 // src/svg-routing.js
 function nodeShape(node) {
   return node.querySelector(":scope > .label-container, :scope > .outer-path, :scope > rect, :scope > circle, :scope > ellipse, :scope > polygon, :scope > path") || [...node.children].find((child) => child.localName === "g" && !child.classList.contains("label") && child.querySelector("path,rect,circle,ellipse,polygon"));
@@ -396,17 +427,51 @@ function readPoints(edge) {
 function simplifyPoints(points) {
   const result = [];
   for (const point of points) {
-    if (result.length && distance(result.at(-1), point) < EPS) continue;
+    if (result.length && distance(result.at(-1), point) < EPS2) continue;
     while (result.length >= 2) {
       const a = result.at(-2), b = result.at(-1);
-      const cross = (b.x - a.x) * (point.y - b.y) - (b.y - a.y) * (point.x - b.x);
+      const cross2 = (b.x - a.x) * (point.y - b.y) - (b.y - a.y) * (point.x - b.x);
       const forward = (b.x - a.x) * (point.x - b.x) + (b.y - a.y) * (point.y - b.y);
-      if (Math.abs(cross) > EPS || forward < 0) break;
+      if (Math.abs(cross2) > EPS2 || forward < 0) break;
       result.pop();
     }
     result.push({ x: point.x, y: point.y });
   }
   return result;
+}
+function routeQuality(input) {
+  const invalid = { length: Infinity, bends: 0, selfIntersections: 0, retraces: 0, score: Infinity };
+  if (!Array.isArray(input) || input.some((p) => !p || !Number.isFinite(p.x) || !Number.isFinite(p.y))) return invalid;
+  const points = simplifyPoints(input);
+  if (points.length < 2) return invalid;
+  let length = 0, selfIntersections = 0, retraces = 0;
+  const cross2 = (a, b) => a.x * b.y - a.y * b.x;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1], b = points[i], v = { x: b.x - a.x, y: b.y - a.y };
+    length += distance(a, b);
+    for (let j = i + 1; j < points.length; j++) {
+      const c = points[j - 1], d = points[j], w = { x: d.x - c.x, y: d.y - c.y };
+      const offset = { x: c.x - a.x, y: c.y - a.y }, determinant = cross2(v, w);
+      if (Math.abs(determinant) < EPS2) {
+        if (Math.abs(cross2(offset, v)) > EPS2) continue;
+        const axis = Math.abs(v.x) > Math.abs(v.y) ? "x" : "y";
+        const overlap = Math.min(Math.max(a[axis], b[axis]), Math.max(c[axis], d[axis])) - Math.max(Math.min(a[axis], b[axis]), Math.min(c[axis], d[axis]));
+        if (overlap > EPS2) retraces++;
+        else if (overlap >= -EPS2 && j > i + 1) selfIntersections++;
+      } else if (j > i + 1) {
+        const t = cross2(offset, w) / determinant, u = cross2(offset, v) / determinant;
+        if (t >= -1e-7 && t <= 1 + 1e-7 && u >= -1e-7 && u <= 1 + 1e-7) selfIntersections++;
+      }
+    }
+  }
+  const bends = Math.max(0, points.length - 2);
+  return {
+    length,
+    bends,
+    selfIntersections,
+    retraces,
+    score: selfIntersections || retraces ? Infinity : length + bends * BEND_COST
+  };
 }
 function roundedPath(input, radius = 7) {
   const points = simplifyPoints(input);
@@ -430,10 +495,10 @@ function segmentBlocked(a, b, boxes, pad = 0) {
   return boxes.some((box) => {
     let lo = 0, hi = 1;
     for (const [p, q] of [
-      [-(b.x - a.x), a.x - box.x + pad - EPS],
-      [b.x - a.x, box.right + pad - a.x - EPS],
-      [-(b.y - a.y), a.y - box.y + pad - EPS],
-      [b.y - a.y, box.bottom + pad - a.y - EPS]
+      [-(b.x - a.x), a.x - box.x + pad - EPS2],
+      [b.x - a.x, box.right + pad - a.x - EPS2],
+      [-(b.y - a.y), a.y - box.y + pad - EPS2],
+      [b.y - a.y, box.bottom + pad - a.y - EPS2]
     ]) {
       if (Math.abs(p) < 1e-9) {
         if (q < 0) return false;
@@ -446,9 +511,9 @@ function segmentBlocked(a, b, boxes, pad = 0) {
 function clearRoute(points, boxes, pad = 0) {
   return points.slice(1).every((p, i) => !segmentBlocked(points[i], p, boxes, pad));
 }
-function orthogonalRoute(start, end, boxes, clearance = CLEARANCE, occupied = []) {
-  const xs = [.../* @__PURE__ */ new Set([start.x, end.x, ...boxes.flatMap((b) => [b.x - clearance, b.right + clearance])])].sort((a, b) => a - b);
-  const ys = [.../* @__PURE__ */ new Set([start.y, end.y, ...boxes.flatMap((b) => [b.y - clearance, b.bottom + clearance])])].sort((a, b) => a - b);
+function orthogonalRoute(start, end, boxes, clearance = CLEARANCE, occupied = [], directions = {}) {
+  const xs = [.../* @__PURE__ */ new Set([start.x, end.x, ...directions.extraX || [], ...boxes.flatMap((b) => [b.x - clearance, b.right + clearance])])].sort((a, b) => a - b);
+  const ys = [.../* @__PURE__ */ new Set([start.y, end.y, ...directions.extraY || [], ...boxes.flatMap((b) => [b.y - clearance, b.bottom + clearance])])].sort((a, b) => a - b);
   if (xs.length * ys.length > 4e4) return null;
   const startIndex = ys.indexOf(start.y) * xs.length + xs.indexOf(start.x);
   const endIndex = ys.indexOf(end.y) * xs.length + xs.indexOf(end.x);
@@ -485,15 +550,19 @@ function orthogonalRoute(start, end, boxes, clearance = CLEARANCE, occupied = []
     }
     return first;
   };
-  for (const axis of [0, 1]) {
+  const axisOf = (v) => Math.abs(v.x) > Math.abs(v.y) ? 0 : 1;
+  for (const axis of directions.start ? [axisOf(directions.start)] : [0, 1]) {
     const key = startIndex * 2 + axis;
     costs.set(key, 0);
     push({ index: startIndex, axis, key, cost: 0, priority: estimate(startIndex) });
   }
   let finish;
+  let visited = 0;
   while (queue.length) {
     const current = pop();
     if (current.cost !== costs.get(current.key)) continue;
+    if (++visited > (directions.maxVisited || 8e4)) return null;
+    if (directions.budget && --directions.budget.remaining < 0) return null;
     if (current.index === endIndex) {
       finish = current.key;
       break;
@@ -502,8 +571,11 @@ function orthogonalRoute(start, end, boxes, clearance = CLEARANCE, occupied = []
     for (const [nx, ny, axis] of [[x - 1, y, 0], [x + 1, y, 0], [x, y - 1, 1], [x, y + 1, 1]]) {
       if (nx < 0 || nx >= xs.length || ny < 0 || ny >= ys.length) continue;
       const index = ny * xs.length + nx, a = point(current.index), b = point(index);
+      const movement = { x: b.x - a.x, y: b.y - a.y };
+      const backwards = (v) => v && movement.x * v.x + movement.y * v.y < -EPS2;
+      if (current.index === startIndex && backwards(directions.start) || index === endIndex && backwards(directions.end)) continue;
       const segmentKey = current.index < index ? `${current.index}:${index}` : `${index}:${current.index}`;
-      if (!visibility.has(segmentKey)) visibility.set(segmentKey, !segmentBlocked(a, b, boxes));
+      if (!visibility.has(segmentKey)) visibility.set(segmentKey, !segmentBlocked(a, b, boxes) && !(directions.avoidSegments || []).some(([p, q]) => segmentIntersection(a, b, p, q)));
       if (!visibility.get(segmentKey)) continue;
       let congestion = congestionCache.get(segmentKey);
       if (congestion === void 0) {
@@ -511,14 +583,14 @@ function orthogonalRoute(start, end, boxes, clearance = CLEARANCE, occupied = []
         for (const [p, q] of occupied) {
           const horizontal = near(a.y, b.y), otherHorizontal = near(p.y, q.y);
           if (horizontal !== otherHorizontal) continue;
-          const axis2 = horizontal ? "x" : "y", cross = horizontal ? "y" : "x";
-          if (Math.abs(a[cross] - p[cross]) > 4) continue;
+          const axis2 = horizontal ? "x" : "y", cross2 = horizontal ? "y" : "x";
+          if (Math.abs(a[cross2] - p[cross2]) > 4) continue;
           const overlap = Math.min(Math.max(a[axis2], b[axis2]), Math.max(p[axis2], q[axis2])) - Math.max(Math.min(a[axis2], b[axis2]), Math.min(p[axis2], q[axis2]));
           if (overlap > 0) congestion += overlap * 6;
         }
         congestionCache.set(segmentKey, congestion);
       }
-      const cost = current.cost + distance(a, b) + (axis === current.axis ? 0 : 22) + congestion;
+      const cost = current.cost + distance(a, b) + (axis === current.axis ? 0 : BEND_COST) + congestion + (index === endIndex && directions.end && axis !== axisOf(directions.end) ? BEND_COST : 0);
       const key = index * 2 + axis;
       if (cost >= (costs.get(key) ?? Infinity)) continue;
       costs.set(key, cost);
@@ -556,23 +628,23 @@ function sideOf(point, adjacent) {
   const dx = adjacent.x - point.x, dy = adjacent.y - point.y;
   return Math.abs(dx) > Math.abs(dy) ? dx > 0 ? "right" : "left" : dy > 0 ? "bottom" : "top";
 }
-function onSide(box, side, cross) {
-  return horizontalSide(side) ? { x: side === "left" ? box.x : box.right, y: cross } : { x: cross, y: side === "top" ? box.y : box.bottom };
+function onSide(box, side, cross2) {
+  return horizontalSide(side) ? { x: side === "left" ? box.x : box.right, y: cross2 } : { x: cross2, y: side === "top" ? box.y : box.bottom };
 }
 function movePort(edge, start, side, value, reach) {
   let points = (start ? edge.points : edge.points.slice().reverse()).map((p) => ({ ...p }));
-  const cross = horizontalSide(side) ? "y" : "x", axis = cross === "x" ? "y" : "x";
-  const old = points[0][cross];
-  points[0][cross] = value;
-  if (points.length === 2 && !near(value, points[1][cross])) {
+  const cross2 = horizontalSide(side) ? "y" : "x", axis = cross2 === "x" ? "y" : "x";
+  const old = points[0][cross2];
+  points[0][cross2] = value;
+  if (points.length === 2 && !near(value, points[1][cross2])) {
     const middle = reach === void 0 ? (points[0][axis] + points[1][axis]) / 2 : points[0][axis] + signOf(side) * reach;
     points.splice(1, 0, { ...points[0], [axis]: middle }, { ...points[1], [axis]: middle });
   } else if (points.length > 2) {
-    points[1][cross] = value;
+    points[1][cross2] = value;
     if (reach !== void 0) {
       const middle = points[0][axis] + signOf(side) * reach;
       points[1][axis] = middle;
-      if (points.length === 3 || near(points[1][axis], points[2][axis]) || near(old, points[2][cross])) {
+      if (points.length === 3 || near(points[1][axis], points[2][axis]) || near(old, points[2][cross2])) {
         points.splice(2, 0, { ...points[2], [axis]: middle });
       } else if (points.length >= 4) points[2][axis] = middle;
     }
@@ -582,21 +654,21 @@ function movePort(edge, start, side, value, reach) {
 function simplifyPortJog(edge, start, side, peers, boxes) {
   const points = start ? edge.points : edge.points.slice().reverse();
   if (points.length < 4) return;
-  const cross = horizontalSide(side) ? "y" : "x", axis = cross === "x" ? "y" : "x";
-  if (!near(points[0][cross], points[1][cross]) || !near(points[1][axis], points[2][axis]) || !near(points[2][cross], points[3][cross])) return;
-  const nextCross = points[2][cross], delta = Math.abs(points[0][cross] - nextCross);
+  const cross2 = horizontalSide(side) ? "y" : "x", axis = cross2 === "x" ? "y" : "x";
+  if (!near(points[0][cross2], points[1][cross2]) || !near(points[1][axis], points[2][axis]) || !near(points[2][cross2], points[3][cross2])) return;
+  const nextCross = points[2][cross2], delta2 = Math.abs(points[0][cross2] - nextCross);
   const box = (start ? edge.source : edge.target).box;
   const low = horizontalSide(side) ? box.y : box.x, span = horizontalSide(side) ? box.height : box.width;
-  if (delta > 12 || nextCross < low + 12 || nextCross > low + span - 12) return;
+  if (delta2 > 12 || nextCross < low + 12 || nextCross > low + span - 12) return;
   if (peers.some((peer) => peer.edge !== edge && Math.abs(peer.value - nextCross) < PORT_GAP)) return;
-  const next = [{ ...points[0], [cross]: nextCross }, ...points.slice(3)];
+  const next = [{ ...points[0], [cross2]: nextCross }, ...points.slice(3)];
   if (!clearRoute(next, boxes)) return;
   edge.points = start ? next : next.reverse();
 }
 function routeFlowEdges(svg, graph) {
-  const geometry = flowGeometry(svg, graph);
-  if (!geometry) return;
-  const { nodes, edges } = geometry;
+  const geometry2 = flowGeometry(svg, graph);
+  if (!geometry2) return;
+  const { nodes, edges } = geometry2;
   const groups = /* @__PURE__ */ new Map();
   for (const edge of edges) {
     edge.element.setAttribute("data-gptm-source", edge.source.element.id);
@@ -705,6 +777,39 @@ function asPath(element) {
   element.replaceWith(path);
   return path;
 }
+function nativeLabelBox(center, size) {
+  return {
+    x: center.x - size.width / 2 - 7,
+    y: center.y - size.height / 2 - 7,
+    right: center.x + size.width / 2 + 7,
+    bottom: center.y + size.height / 2 + 7
+  };
+}
+function labelOnRoute(svg, points, size, barriers, occupied, original) {
+  const old = { x: size.x + size.width / 2, y: size.y + size.height / 2 }, candidates = [];
+  const add = (point) => {
+    const box = nativeLabelBox(point, size);
+    if (barriers.some((b) => boxesOverlap(box, b)) || occupied.some(([a, b]) => segmentBlocked(a, b, [box], 2))) return;
+    candidates.push({ x: point.x, y: point.y, box, score: distance(point, old) });
+  };
+  if (original?.getTotalLength) {
+    const length = original.getTotalLength(), steps = Math.min(1e3, Math.max(20, Math.ceil(length / 5)));
+    for (let i = 1; i < steps; i++) add(inSvg(svg, original, original.getPointAtLength(length * i / steps)));
+  } else {
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1], b = points[i], length = distance(a, b);
+      if (length < 1) continue;
+      const margin = 8, lo = margin / length, hi = 1 - lo;
+      if (lo > hi) continue;
+      const projection = ((old.x - a.x) * (b.x - a.x) + (old.y - a.y) * (b.y - a.y)) / (length * length);
+      const samples = /* @__PURE__ */ new Set([Math.max(lo, Math.min(hi, projection)), 0.5]);
+      const steps = Math.min(200, Math.ceil(length / 8));
+      for (let j = 0; j <= steps; j++) samples.add(lo + (hi - lo) * j / steps);
+      for (const t of samples) add({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+    }
+  }
+  return candidates.sort((a, b) => a.score - b.score)[0];
+}
 function routeNativeEdges(svg) {
   const nodes = new Map([...svg.querySelectorAll("g.node[data-id]")].map((element) => {
     const shape = nodeShape(element);
@@ -739,12 +844,13 @@ function routeNativeEdges(svg) {
   for (const group of groups.values()) {
     if (group.length < 2 || group.some((port) => !port.edge.compatible)) continue;
     group.sort((a, b) => a.value - b.value);
+    if (!group.some((port, i) => i && port.value - group[i - 1].value < PORT_GAP)) continue;
     const { node, side } = group[0], box = node.box, horizontal = horizontalSide(side);
     const span = horizontal ? box.height : box.width, low = horizontal ? box.y : box.x;
     const margin = Math.min(12, span * 0.2), spacing = Math.min(24, (span - margin * 2) / (group.length - 1));
     group.forEach((port, index) => {
-      const cross = low + span / 2 + (index - (group.length - 1) / 2) * spacing;
-      port.anchor = onSide(box, side, cross);
+      const cross2 = low + span / 2 + (index - (group.length - 1) / 2) * spacing;
+      port.anchor = onSide(box, side, cross2);
       port.spacing = spacing;
       const previous = Number(port.edge.element.getAttribute("data-gptm-port-span")) || Infinity;
       port.edge.element.setAttribute("data-gptm-port-span", String(Math.min(previous, spacing)));
@@ -761,8 +867,9 @@ function routeNativeEdges(svg) {
   ]));
   const reservedLabels = [];
   const shields = [...ports.values()].filter((port) => port.edge.compatible).map((port) => {
-    const half = Math.min(9, port.spacing * 0.38), p = port.anchor, horizontal = horizontalSide(port.side);
-    const distance2 = 20, out = signOf(port.side) * distance2;
+    const arrow = port.edge.element.hasAttribute(port.start ? "marker-start" : "marker-end");
+    const half = arrow ? Math.min(9, port.spacing * 0.38) : 2.5, p = port.anchor, horizontal = horizontalSide(port.side);
+    const distance2 = arrow ? 20 : 6, out = signOf(port.side) * distance2;
     const x = horizontal ? Math.min(p.x, p.x + out) : p.x - half;
     const y = horizontal ? p.y - half : Math.min(p.y, p.y + out);
     return {
@@ -773,7 +880,22 @@ function routeNativeEdges(svg) {
       bottom: y + (horizontal ? half * 2 : distance2)
     };
   });
-  for (const edge of edges.filter((edge2) => edge2.compatible)) {
+  const approaches = [...ports.values()].filter((port) => port.edge.compatible).map((port) => {
+    const p = port.anchor, horizontal = horizontalSide(port.side), out = signOf(port.side) * 24;
+    return {
+      edge: port.edge,
+      x: horizontal ? Math.min(p.x, p.x + out) : p.x - 2.5,
+      right: horizontal ? Math.max(p.x, p.x + out) : p.x + 2.5,
+      y: horizontal ? p.y - 2.5 : Math.min(p.y, p.y + out),
+      bottom: horizontal ? p.y + 2.5 : Math.max(p.y, p.y + out)
+    };
+  });
+  const labelSizes = new Map(edges.map((edge) => {
+    const label = labelById.get(edge.element.dataset.id);
+    return [edge, label?.textContent.trim() ? boundsInSvg(svg, label) : null];
+  }));
+  const routingOrder = edges.filter((edge) => edge.compatible).sort((a, b) => (labelSizes.get(b)?.width || 0) - (labelSizes.get(a)?.width || 0));
+  for (const edge of routingOrder) {
     if (edge.source === edge.target) continue;
     const a = ports.get(`${edge.element.id}:true`), b = ports.get(`${edge.element.id}:false`);
     const lead = (port) => {
@@ -782,66 +904,78 @@ function routeNativeEdges(svg) {
       return point;
     };
     const start = lead(a), end = lead(b);
-    const barriers = [...boxes, ...shields.filter((shield) => shield.edge !== edge), ...reservedLabels];
-    const label = labelById.get(edge.element.dataset.id);
-    let route, reservation;
-    if (label?.textContent.trim()) {
-      const labelBox = boundsInSvg(svg, label);
-      const center = { x: labelBox.x + labelBox.width / 2, y: labelBox.y + labelBox.height / 2 };
-      const candidates = [];
-      for (let row = -8; row <= 8; row++) for (let column = -8; column <= 8; column++) {
-        const x = center.x + column * 22, y = center.y + row * 18;
-        const box = {
-          x: x - labelBox.width / 2 - 7,
-          y: y - labelBox.height / 2 - 7,
-          right: x + labelBox.width / 2 + 7,
-          bottom: y + labelBox.height / 2 + 7
-        };
-        if (barriers.some((b2) => box.x < b2.right && box.right > b2.x && box.y < b2.bottom && box.bottom > b2.y)) continue;
-        if (occupied.some(([p, q]) => segmentBlocked(p, q, [box], 2))) continue;
-        candidates.push({ x, y, box, score: Math.hypot(x - center.x, y - center.y) });
+    const foreignShields = shields.filter((shield) => shield.edge !== edge);
+    const barriers = [...boxes, ...foreignShields, ...reservedLabels];
+    const labelBarriers = [...boxes, ...shields, ...approaches.filter((item) => item.edge !== edge), ...reservedLabels];
+    const foreign = [...nodes.values()].filter((node) => node !== edge.source && node !== edge.target).map((node) => node.box);
+    const completeBarriers = [...foreign, ...foreignShields, ...reservedLabels];
+    const size = labelSizes.get(edge);
+    const vector2 = (a2, b2) => ({ x: b2.x - a2.x, y: b2.y - a2.y });
+    const directions = { start: vector2(a.anchor, start), end: vector2(end, b.anchor) };
+    let best;
+    const consider = (points2, original = false) => {
+      const quality = routeQuality(points2);
+      if (!Number.isFinite(quality.score) || !clearRoute(points2, completeBarriers)) return;
+      const reservation2 = size && labelOnRoute(svg, points2, size, labelBarriers, occupied, original && edge.element);
+      if (size && !reservation2) return;
+      const score = quality.score + (reservation2?.score || 0) * 0.02;
+      if (!best || score < best.score) best = { points: points2, reservation: reservation2, score, original };
+    };
+    if (!changed.has(edge)) consider(edge.points, true);
+    if (!best) {
+      const route = orthogonalRoute(start, end, barriers, CLEARANCE, occupied, directions);
+      if (route) consider(simplifyPoints([a.anchor, ...route, b.anchor]));
+    }
+    if (!best && size) {
+      const center = { x: size.x + size.width / 2, y: size.y + size.height / 2 }, candidates = [];
+      for (let row = -6; row <= 6; row++) for (let column = -6; column <= 6; column++) {
+        const point = { x: center.x + column * 22, y: center.y + row * 18 }, box = nativeLabelBox(point, size);
+        if (labelBarriers.some((b2) => boxesOverlap(box, b2)) || occupied.some(([p, q]) => segmentBlocked(p, q, [box], 2))) continue;
+        candidates.push({ ...point, box, score: distance(start, point) + distance(point, end) });
       }
       candidates.sort((a2, b2) => a2.score - b2.score);
-      for (const candidate of candidates.slice(0, 20)) {
-        const left = { x: candidate.box.x - 6, y: candidate.y }, right = { x: candidate.box.right + 6, y: candidate.y };
-        const forward = distance(start, left) + distance(end, right) <= distance(start, right) + distance(end, left);
-        const enter = forward ? left : right, exit = forward ? right : left;
-        const withLabel = [...barriers, candidate.box];
-        const before = orthogonalRoute(start, enter, withLabel, 10, occupied);
-        const after = orthogonalRoute(exit, end, withLabel, 10, occupied);
-        if (!before || !after) continue;
-        route = [...before, ...after];
-        reservation = candidate;
-        break;
+      for (const candidate of candidates.slice(0, 16)) for (const horizontal of [true, false]) {
+        const first = horizontal ? { x: candidate.x - 8, y: candidate.y } : { x: candidate.x, y: candidate.y - 8 };
+        const last = horizontal ? { x: candidate.x + 8, y: candidate.y } : { x: candidate.x, y: candidate.y + 8 };
+        const forward = distance(start, first) + distance(end, last) <= distance(start, last) + distance(end, first);
+        const enter = forward ? first : last, exit = forward ? last : first, through = vector2(enter, exit);
+        const before = orthogonalRoute(start, enter, barriers, CLEARANCE, occupied, { start: directions.start, end: through });
+        const after = orthogonalRoute(exit, end, barriers, CLEARANCE, occupied, { start: through, end: directions.end });
+        if (before && after) consider(simplifyPoints([a.anchor, ...before, ...after, b.anchor]));
       }
     }
-    route || (route = orthogonalRoute(start, end, barriers, 10, occupied));
-    if (!route) continue;
-    const points = [a.anchor, ...route, b.anchor];
-    const foreign = [...nodes.values()].filter((node) => node !== edge.source && node !== edge.target).map((node) => node.box);
-    if (!clearRoute(points, [...foreign, ...shields.filter((shield) => shield.edge !== edge), ...reservedLabels])) continue;
-    writePoints(svg, edge.element, points);
+    if (!best) {
+      for (let i = 1; i < edge.points.length; i++) occupied.push([edge.points[i - 1], edge.points[i]]);
+      continue;
+    }
+    const { points, reservation } = best;
+    if (!best.original) {
+      writePoints(svg, edge.element, points);
+      edge.element.setAttribute("data-gptm-native-rerouted", "true");
+    }
     for (let i = 1; i < points.length; i++) occupied.push([points[i - 1], points[i]]);
     if (reservation) {
       reservedLabels.push(reservation.box);
       edge.element.setAttribute("data-gptm-label-x", String(reservation.x));
       edge.element.setAttribute("data-gptm-label-y", String(reservation.y));
     }
-    edge.element.setAttribute("data-gptm-native-rerouted", "true");
   }
   svg.setAttribute("data-gptm-native-routes", String(edges.filter((e) => e.element.hasAttribute("data-gptm-native-rerouted")).length));
 }
-var NS, EPS, PORT_GAP, CLEARANCE, near, distance, horizontalSide, signOf;
+var NS, EPS2, PORT_GAP, CLEARANCE, BEND_COST, near, distance, horizontalSide, signOf, boxesOverlap;
 var init_svg_routing = __esm({
   "src/svg-routing.js"() {
+    init_path_intersections();
     NS = "http://www.w3.org/2000/svg";
-    EPS = 0.05;
+    EPS2 = 0.05;
     PORT_GAP = 18;
     CLEARANCE = 10;
-    near = (a, b) => Math.abs(a - b) < EPS;
+    BEND_COST = 22;
+    near = (a, b) => Math.abs(a - b) < EPS2;
     distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
     horizontalSide = (side) => side === "left" || side === "right";
     signOf = (side) => side === "left" || side === "top" ? -1 : 1;
+    boxesOverlap = (a, b) => a.x < b.right && a.right > b.x && a.y < b.bottom && a.bottom > b.y;
   }
 });
 
@@ -1075,7 +1209,7 @@ function clippedSegments(length, head, tail, pattern, offset) {
   const firstOrigin = -phase + Math.floor((head + phase) / period) * period;
   const cycles = Math.max(0, Math.ceil((end - firstOrigin) / period));
   if (!Number.isFinite(cycles) || cycles * pattern.length > SHAFT_MAX_SEGMENTS) return null;
-  const segments = [];
+  const segments2 = [];
   for (let cycle = 0; cycle < cycles; cycle++) {
     let cursor = firstOrigin + cycle * period;
     for (let index = 0; index < pattern.length; index++) {
@@ -1084,20 +1218,20 @@ function clippedSegments(length, head, tail, pattern, offset) {
         const start = Math.max(head, cursor);
         const stop = Math.min(end, next);
         if (stop > start) {
-          const previous = segments[segments.length - 1];
+          const previous = segments2[segments2.length - 1];
           if (previous && start <= previous[1]) previous[1] = Math.max(previous[1], stop);
-          else segments.push([start, stop]);
+          else segments2.push([start, stop]);
         }
       }
       cursor = next;
     }
   }
-  return segments;
+  return segments2;
 }
-function encodeSegments(segments, length, scale) {
+function encodeSegments(segments2, length, scale) {
   const dash = [0];
   let cursor = 0;
-  for (const [start, end] of segments) {
+  for (const [start, end] of segments2) {
     dash.push(Math.max(0, start - cursor) / scale, (end - start) / scale);
     cursor = end;
   }
@@ -1150,12 +1284,12 @@ function trimArrowShafts(svg) {
       skip("unsupported-dash-length");
       continue;
     }
-    const segments = clippedSegments(length, head, tail, dash.pattern, dash.offset);
-    if (segments === null) {
+    const segments2 = clippedSegments(length, head, tail, dash.pattern, dash.offset);
+    if (segments2 === null) {
       skip("dash-segment-budget");
       continue;
     }
-    edge.style.setProperty("stroke-dasharray", encodeSegments(segments, length, scale), "important");
+    edge.style.setProperty("stroke-dasharray", encodeSegments(segments2, length, scale), "important");
     edge.style.setProperty("stroke-dashoffset", "0", "important");
     edge.style.setProperty("stroke-linecap", "butt", "important");
     report.trimmed++;
@@ -1352,7 +1486,7 @@ function planAdaptiveFlowLayout(graph, options) {
   const horizontal = direction === "LR" || direction === "RL";
   const sign = direction === "RL" || direction === "BT" ? -1 : 1;
   const axis = horizontal ? "x" : "y";
-  const cross = horizontal ? "y" : "x";
+  const cross2 = horizontal ? "y" : "x";
   const axisSize = horizontal ? "width" : "height";
   const crossSize = horizontal ? "height" : "width";
   const original = boundsOf([
@@ -1427,7 +1561,7 @@ function planAdaptiveFlowLayout(graph, options) {
       const distance2 = sign > 0 ? point[axis] - band.box[axis] : band.box[axis] + band.box[axisSize] - point[axis];
       return {
         [axis]: band.forward > 0 ? primaryMin + distance2 : primaryMax - distance2,
-        [cross]: band.crossStart + point[cross] - band.box[cross]
+        [cross2]: band.crossStart + point[cross2] - band.box[cross2]
       };
     };
     for (let rank = band.start; rank <= band.end; rank++) {
@@ -1467,12 +1601,12 @@ function planAdaptiveFlowLayout(graph, options) {
       const to = positionById.get(edge.end);
       const side = fromBand.forward;
       const outer = side > 0 ? primaryMax + clearance : primaryMin - clearance;
-      const head = { [axis]: from[axis] + side * from.box[axisSize] / 2, [cross]: from[cross] };
-      const tail = { [axis]: to[axis] + side * to.box[axisSize] / 2, [cross]: to[cross] };
+      const head = { [axis]: from[axis] + side * from.box[axisSize] / 2, [cross2]: from[cross2] };
+      const tail = { [axis]: to[axis] + side * to.box[axisSize] / 2, [cross2]: to[cross2] };
       points = [
         head,
-        { [axis]: outer, [cross]: head[cross] },
-        { [axis]: outer, [cross]: tail[cross] },
+        { [axis]: outer, [cross2]: head[cross2] },
+        { [axis]: outer, [cross2]: tail[cross2] },
         tail
       ];
       label = midpointOfLongestSegment(points);
@@ -1639,6 +1773,539 @@ var init_svg_adaptive = __esm({
     ADAPTIVE_PADDING = 24;
     ADAPTIVE_TURN_CLEARANCE = 32;
     ADAPTIVE_EPSILON = 0.01;
+  }
+});
+
+// src/svg-crossings.js
+function flattenPath(element) {
+  const data = element.getAttribute?.("d");
+  if (!data || /[aAbBsStTzZ]/.test(data)) return null;
+  const tokens = data.match(/[MLHVQCmlhvqc]|[-+]?(?:\d*\.?\d+)(?:[eE][-+]?\d+)?/g) || [];
+  let point = { x: 0, y: 0 }, command, i = 0;
+  const result = [];
+  const midpoint = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+  const flatten = (controls, depth = 0) => {
+    const a = controls[0], b = controls.at(-1), v = vector(a, b), length = norm(a, b);
+    const error = Math.max(...controls.slice(1, -1).map((p) => {
+      const t = length ? Math.max(0, Math.min(1, ((p.x - a.x) * v.x + (p.y - a.y) * v.y) / length ** 2)) : 0;
+      return norm(p, { x: a.x + v.x * t, y: a.y + v.y * t });
+    }));
+    if (error < 0.1 || depth >= 12) {
+      result.push(b);
+      return;
+    }
+    const left = [a], right = [b];
+    let row = controls;
+    while (row.length > 1) {
+      row = row.slice(1).map((p, i2) => midpoint(row[i2], p));
+      left.push(row[0]);
+      right.unshift(row.at(-1));
+    }
+    flatten(left, depth + 1);
+    flatten(right, depth + 1);
+  };
+  while (i < tokens.length) {
+    if (/^[a-z]$/i.test(tokens[i])) command = tokens[i++];
+    if (!command) return null;
+    const type = command.toUpperCase(), count = { M: 2, L: 2, H: 1, V: 1, Q: 4, C: 6 }[type];
+    if (!count || i + count > tokens.length) return null;
+    const values = tokens.slice(i, i + count).map(Number);
+    if (values.some((v) => !Number.isFinite(v))) return null;
+    i += count;
+    const relative = command !== type;
+    const next = (x, y) => ({ x: x + (relative ? point.x : 0), y: y + (relative ? point.y : 0) });
+    if (type === "H") point = { x: values[0] + (relative ? point.x : 0), y: point.y };
+    else if (type === "V") point = { x: point.x, y: values[0] + (relative ? point.y : 0) };
+    else if (type === "Q" || type === "C") {
+      const controls = [point];
+      for (let j = 0; j < values.length; j += 2) controls.push(next(values[j], values[j + 1]));
+      flatten(controls);
+      point = controls.at(-1);
+      continue;
+    } else point = next(...values);
+    result.push(type === "M" ? { ...point, move: true } : point);
+    if (type === "M") command = relative ? "l" : "L";
+  }
+  return result.length >= 2 ? result : null;
+}
+function sampleEdge(svg, element) {
+  const explicit = flattenPath(element);
+  if (explicit) return explicit.map((point) => {
+    const p = inSvg(svg, element, point);
+    return { x: p.x, y: p.y, ...point.move ? { move: true } : {} };
+  });
+  const length = element.getTotalLength();
+  if (!Number.isFinite(length) || length <= 0) return [];
+  const steps = Math.min(16384, Math.max(2, Math.ceil(length / 0.5)));
+  const input = Array.from({ length: steps + 1 }, (_, i) => {
+    const p = inSvg(svg, element, element.getPointAtLength(length * i / steps));
+    return { x: p.x, y: p.y };
+  });
+  const reduce = (lo, hi) => {
+    const a = input[lo], b = input[hi], dx = b.x - a.x, dy = b.y - a.y, length2 = Math.hypot(dx, dy);
+    let farthest = 0, at = -1;
+    for (let i = lo + 1; i < hi; i++) {
+      const p = input[i], t = length2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / length2 ** 2)) : 0;
+      const distance2 = Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
+      if (distance2 > farthest) {
+        farthest = distance2;
+        at = i;
+      }
+    }
+    return farthest > 0.2 ? [...reduce(lo, at).slice(0, -1), ...reduce(at, hi)] : [a, b];
+  };
+  return reduce(0, input.length - 1);
+}
+function collectEdges(svg) {
+  const semanticNodes = new Map([...svg.querySelectorAll("g.node[data-id]")].map((node) => [node.dataset.id, node.id]));
+  return [...svg.querySelectorAll(EDGE_SELECTOR)].filter((element) => !element.closest("defs,marker") && typeof element.getTotalLength === "function").map((element) => {
+    const points = sampleEdge(svg, element);
+    const source = element.dataset.gptmSource || semanticNodes.get(element.dataset.source);
+    const target = element.dataset.gptmTarget || semanticNodes.get(element.dataset.target);
+    if (source && target) {
+      element.setAttribute("data-gptm-source", source);
+      element.setAttribute("data-gptm-target", target);
+    }
+    return {
+      element,
+      id: element.dataset.id || element.id,
+      points,
+      controls: readPoints(element)?.map((p) => {
+        const q = inSvg(svg, element, p);
+        return { x: q.x, y: q.y };
+      }),
+      source,
+      target,
+      shared: element.dataset.gptmSharedTip,
+      box: points.length ? boxOf(points) : null
+    };
+  }).filter((edge) => edge.points.length >= 2);
+}
+function allowedJunction(a, b, hit) {
+  if (a.shared && a.shared === b.shared) {
+    const commonSegments = [];
+    let i = a.points.length - 1, j = b.points.length - 1, end = a.points[i];
+    if (norm(end, b.points[j]) < 0.05) while (i > 0 && j > 0) {
+      const p = a.points[i - 1], q = b.points[j - 1];
+      const v = vector(end, p), w = vector(end, q), length = Math.hypot(v.x, v.y), otherLength = Math.hypot(w.x, w.y);
+      if (Math.abs(v.x * w.y - v.y * w.x) > 1e-4 || v.x * w.x + v.y * w.y < 0) break;
+      const next = length < otherLength ? p : q;
+      commonSegments.push([next, end]);
+      end = next;
+      if (length <= otherLength + 0.05) i--;
+      if (otherLength <= length + 0.05) j--;
+    }
+    for (const [p, q] of commonSegments) {
+      const r = p, s = q;
+      const common = segmentIntersection(p, q, r, s);
+      if (common?.kind !== "overlap") continue;
+      const v = vector(p, q), length2 = v.x ** 2 + v.y ** 2;
+      const projection = (point) => ((point.x - p.x) * v.x + (point.y - p.y) * v.y) / length2;
+      const lo = Math.max(0, Math.min(projection(r), projection(s)));
+      const hi = Math.min(1, Math.max(projection(r), projection(s)));
+      const t = Math.max(lo, Math.min(hi, projection(hit)));
+      const gap = norm(hit, { x: p.x + t * v.x, y: p.y + t * v.y });
+      if (gap < 0.05 && hit.kind !== "cross") return true;
+    }
+  }
+  for (const [ownerA, p] of [[a.source, a.points[0]], [a.target, a.points.at(-1)]]) {
+    for (const [ownerB, q] of [[b.source, b.points[0]], [b.target, b.points.at(-1)]]) {
+      if (ownerA && ownerA === ownerB && norm(p, hit) < 2 && norm(q, hit) < 2) return true;
+    }
+  }
+  return false;
+}
+function crossingPairs(edges) {
+  const pairs = [];
+  for (let i = 0; i < edges.length; i++) for (let j = i + 1; j < edges.length; j++) {
+    const a = edges[i], b = edges[j];
+    if (!overlaps2(a.box, b.box)) continue;
+    const hits = [];
+    for (const [p, q] of segments(a.points)) for (const [r, s] of segments(b.points)) {
+      if (!overlaps2(boxOf([p, q]), boxOf([r, s]))) continue;
+      const hit = segmentIntersection(p, q, r, s);
+      if (hit && !allowedJunction(a, b, hit) && !hits.some((h) => norm(h, hit) < 1)) hits.push(hit);
+    }
+    if (hits.length) pairs.push({ a: a.id, b: b.id, hits });
+  }
+  return pairs;
+}
+function triangleCompatible(element) {
+  return ["marker-start", "marker-end"].every((attribute) => {
+    const marker = element.getAttribute(attribute);
+    return !marker || /(?:point(?:Start|End)|barbEnd|extension(?:Start|End)|dependency(?:Start|End)|arrowhead)\)/.test(marker);
+  });
+}
+function endpointShield(edge, start) {
+  if (!edge.element.hasAttribute(start ? "marker-start" : "marker-end")) return null;
+  const points = start ? edge.points : edge.points.slice().reverse();
+  const p = points[0], q = points.find((q2) => norm(q2, p) >= 12) || points.at(-1), length = norm(p, q);
+  if (!length) return null;
+  const depth = Math.min(20, Number(edge.element.dataset.gptmPortSpan) * 0.85 || 20);
+  const v = { x: (q.x - p.x) / length, y: (q.y - p.y) / length }, half = depth / 1.25 / 2 + 1;
+  return boxOf([
+    p,
+    { x: p.x + v.x * depth + v.y * half, y: p.y + v.y * depth - v.x * half },
+    { x: p.x + v.x * depth - v.y * half, y: p.y + v.y * depth + v.x * half }
+  ]);
+}
+function portsFor(node, anchor, adjacent, alternatives) {
+  const b = node.box, v = vector(anchor, adjacent);
+  const side = Math.abs(v.x) > Math.abs(v.y) ? v.x > 0 ? "right" : "left" : v.y > 0 ? "bottom" : "top";
+  const make = (p, side2) => {
+    const axis = side2 === "left" || side2 === "right" ? "x" : "y", sign = side2 === "left" || side2 === "top" ? -1 : 1;
+    return { anchor: p, lead: { ...p, [axis]: p[axis] + sign * 24 }, penalty: norm(p, anchor) };
+  };
+  const ports = [make(anchor, side)];
+  if (alternatives) for (const side2 of ["left", "right", "top", "bottom"]) {
+    const p = side2 === "left" || side2 === "right" ? { x: side2 === "left" ? b.x : b.right, y: (b.y + b.bottom) / 2 } : { x: (b.x + b.right) / 2, y: side2 === "top" ? b.y : b.bottom };
+    if (norm(p, anchor) > 2) ports.push(make(p, side2));
+  }
+  return ports;
+}
+function geometry(svg) {
+  const nodes = [...svg.querySelectorAll("g.node")].map((element) => {
+    const shape = nodeShape(element);
+    return shape && { element, id: element.id, box: boundsInSvg(svg, shape) };
+  }).filter(Boolean);
+  const labels = [...svg.querySelectorAll("g.edgeLabel")].filter((l) => l.textContent.trim()).map((element) => ({
+    element,
+    id: element.querySelector("[data-id]")?.dataset.id || element.dataset.id,
+    box: boundsInSvg(svg, element)
+  }));
+  return { nodes, labels };
+}
+function applyReservation(svg, edge, reservation) {
+  if (!reservation) return;
+  edge.element.setAttribute("data-gptm-label-x", String(reservation.x));
+  edge.element.setAttribute("data-gptm-label-y", String(reservation.y));
+  const label = geometry(svg).labels.find((label2) => label2.id === edge.id);
+  if (label) translateInRoot(
+    svg,
+    label.element,
+    reservation.x - (label.box.x + label.box.right) / 2,
+    reservation.y - (label.box.y + label.box.bottom) / 2
+  );
+}
+function planAvoidance(svg, edge, edges, model, alternatives = false) {
+  const budget = ROUTING_BUDGETS.get(svg);
+  if (budget && budget.remaining <= 0) return null;
+  const source = model.nodes.find((n) => n.id === edge.source), target = model.nodes.find((n) => n.id === edge.target);
+  if (!source || !target || source === target || edge.shared) return null;
+  const compatible = triangleCompatible(edge.element);
+  alternatives = alternatives && compatible;
+  const others = edges.filter((e) => e !== edge);
+  const walls = others.flatMap((e) => segments(e.points));
+  const labels = model.labels.filter((l) => l.id !== edge.id);
+  const shields = others.flatMap((e) => [endpointShield(e, true), endpointShield(e, false)]).filter(Boolean);
+  const boxes = [...model.nodes.map((n) => n.box), ...labels.map((l) => l.box), ...shields];
+  const foreignBoxes = [...model.nodes.filter((n) => n !== source && n !== target).map((n) => n.box), ...labels.map((l) => l.box), ...shields];
+  const ownLabel = model.labels.find((l) => l.id === edge.id);
+  const original = readPoints(edge.element)?.map((p) => inSvg(svg, edge.element, p));
+  const points = compatible && original?.length ? original : edge.points;
+  const starts = portsFor(source, points[0], points[1], alternatives);
+  const ends = portsFor(target, points.at(-1), points.at(-2), alternatives);
+  if (!compatible) {
+    const preserveTangent = (port, adjacent) => {
+      const v = vector(port.anchor, adjacent), length = norm(port.anchor, adjacent);
+      if (length) port.lead = { x: port.anchor.x + v.x * 24 / length, y: port.anchor.y + v.y * 24 / length };
+    };
+    preserveTangent(starts[0], points[1]);
+    preserveTangent(ends[0], points.at(-2));
+  }
+  const extraX = [], extraY = [];
+  for (const other of others) {
+    extraX.push(other.box.x - GAP, other.box.right + GAP);
+    extraY.push(other.box.y - GAP, other.box.bottom + GAP);
+  }
+  const options = starts.flatMap((a) => ends.map((b) => ({ a, b, estimate: norm(a.lead, b.lead) + (a.penalty + b.penalty) * 0.2 }))).sort((a, b) => a.estimate - b.estimate);
+  let best;
+  let labelSearches = 0;
+  for (const { a, b } of options.slice(0, 12)) {
+    if (budget && budget.remaining <= 0) break;
+    const blocked = (p, q) => segmentBlocked(p, q, foreignBoxes) || walls.some(([r, s]) => segmentIntersection(p, q, r, s));
+    if (blocked(a.anchor, a.lead) || blocked(b.lead, b.anchor)) continue;
+    const directions = {
+      start: vector(a.anchor, a.lead),
+      end: vector(b.lead, b.anchor),
+      avoidSegments: walls,
+      extraX,
+      extraY,
+      maxVisited: 5e3,
+      budget
+    };
+    const route = orthogonalRoute(a.lead, b.lead, boxes, GAP, [], directions);
+    if (!route) continue;
+    const consider = (route2) => {
+      const candidate = simplifyPoints([a.anchor, ...route2, b.anchor]), quality = routeQuality(candidate);
+      if (!Number.isFinite(quality.score)) return false;
+      const ownShields = [
+        endpointShield({ ...edge, points: candidate }, true),
+        endpointShield({ ...edge, points: candidate }, false)
+      ].filter(Boolean);
+      const reservation = ownLabel && labelOnRoute(svg, candidate, ownLabel.box, [...boxes, ...ownShields], walls);
+      if (ownLabel && !reservation) return false;
+      const score = quality.score + (a.penalty + b.penalty) * 0.2;
+      if (!best || score < best.score) best = { points: candidate, reservation, score };
+      return true;
+    };
+    if (consider(route) || !ownLabel || best || ++labelSearches > 1) continue;
+    const label = ownLabel.box, center = { x: (label.x + label.right) / 2, y: (label.y + label.bottom) / 2 }, candidates = [];
+    for (let row = -3; row <= 3; row++) for (let column = -3; column <= 3; column++) {
+      const p = { x: center.x + column * (label.width / 2 + GAP), y: center.y + row * (label.height + GAP) };
+      const box = {
+        x: p.x - label.width / 2 - 7,
+        right: p.x + label.width / 2 + 7,
+        y: p.y - label.height / 2 - 7,
+        bottom: p.y + label.height / 2 + 7
+      };
+      if (boxes.some((b2) => overlaps2(box, b2)) || walls.some(([p2, q]) => segmentBlocked(p2, q, [box], 2))) continue;
+      candidates.push({ ...p, score: norm(a.lead, p) + norm(p, b.lead) });
+    }
+    candidates.sort((a2, b2) => a2.score - b2.score);
+    for (const p of candidates.slice(0, 3)) for (const horizontal of [true, false]) {
+      const from = horizontal ? { x: p.x - 8, y: p.y } : { x: p.x, y: p.y - 8 };
+      const to = horizontal ? { x: p.x + 8, y: p.y } : { x: p.x, y: p.y + 8 };
+      const forward = norm(a.lead, from) + norm(to, b.lead) <= norm(a.lead, to) + norm(from, b.lead);
+      const enter = forward ? from : to, exit = forward ? to : from, v = vector(enter, exit);
+      if (blocked(enter, exit)) continue;
+      const before = orthogonalRoute(a.lead, enter, boxes, GAP, [], { ...directions, end: v });
+      const after = orthogonalRoute(exit, b.lead, boxes, GAP, [], { ...directions, start: v });
+      if (before && after) consider([...before, ...after]);
+    }
+  }
+  return best;
+}
+function avoidEdgeCrossings(svg) {
+  let edges = collectEdges(svg), pairs = crossingPairs(edges), changed = 0;
+  const initial = pairs.length;
+  for (let pass = 0; pass < 2 && pairs.length; pass++) {
+    let progress = false;
+    const count = /* @__PURE__ */ new Map();
+    for (const pair of pairs) for (const id of [pair.a, pair.b]) count.set(id, (count.get(id) || 0) + 1);
+    const order = [...count].sort((a, b) => b[1] - a[1]).map(([id]) => id);
+    for (const id of order) {
+      if (!pairs.some((p) => p.a === id || p.b === id)) continue;
+      const edge = edges.find((e) => e.id === id), model = geometry(svg);
+      const plan = planAvoidance(svg, edge, edges, model, pass > 0);
+      if (!plan) continue;
+      const original = edge.element.getAttribute("d"), data = edge.element.getAttribute("data-points");
+      writePoints(svg, edge.element, plan.points);
+      const updated = collectEdges(svg), next = crossingPairs(updated);
+      if (next.length >= pairs.length) {
+        edge.element.setAttribute("d", original);
+        if (data === null) edge.element.removeAttribute("data-points");
+        else edge.element.setAttribute("data-points", data);
+        continue;
+      }
+      applyReservation(svg, edge, plan.reservation);
+      edge.element.setAttribute("data-gptm-crossing-rerouted", "true");
+      edges = updated;
+      pairs = next;
+      changed++;
+      progress = true;
+    }
+    if (!progress && pass > 0) break;
+  }
+  if (changed) {
+    for (const id of edges.filter((edge) => edge.element.hasAttribute("data-gptm-native-rerouted") || edge.element.hasAttribute("data-gptm-crossing-rerouted")).map((edge) => edge.id)) {
+      const edge = edges.find((e) => e.id === id), raw = readPoints(edge.element);
+      if (!raw) continue;
+      const oldScore = routeQuality(raw.map((p) => inSvg(svg, edge.element, p))).score;
+      const plan = planAvoidance(svg, edge, edges, geometry(svg), true);
+      if (!plan || plan.score >= oldScore - 1) continue;
+      const original = edge.element.getAttribute("d"), data = edge.element.getAttribute("data-points");
+      writePoints(svg, edge.element, plan.points);
+      const updated = collectEdges(svg), next = crossingPairs(updated);
+      if (next.length > pairs.length) {
+        edge.element.setAttribute("d", original);
+        edge.element.setAttribute("data-points", data);
+        continue;
+      }
+      applyReservation(svg, edge, plan.reservation);
+      edges = updated;
+      pairs = next;
+    }
+  }
+  svg.setAttribute("data-gptm-crossings-before", String(initial));
+  svg.setAttribute("data-gptm-crossing-routes", String(changed));
+  return { before: initial, remaining: pairs.length, changed };
+}
+function recordCrossings(svg) {
+  const edges = collectEdges(svg), pairs = crossingPairs(edges);
+  for (const edge of edges) edge.element.removeAttribute("data-gptm-crossing");
+  for (const pair of pairs) for (const id of [pair.a, pair.b]) {
+    edges.find((e) => e.id === id).element.setAttribute("data-gptm-crossing", "true");
+  }
+  svg.setAttribute("data-gptm-crossings", String(pairs.length));
+  svg.setAttribute("data-gptm-checked-edges", String(edges.length));
+  svg.setAttribute("data-gptm-routing-status", !edges.length ? "not-applicable" : pairs.length ? "unresolved" : "clear");
+  svg.setAttribute("data-gptm-routing-reason", !pairs.length ? "" : exceedsPlanarEdgeBound(edges) ? "non-planar-edge-bound" : svg.getAttribute("data-gptm-routing-budget-exhausted") === "true" ? "search-budget" : "fixed-obstacles");
+  return pairs;
+}
+function snapshotAttributes(element) {
+  return [...element.attributes].map((attribute) => [attribute.name, attribute.value]);
+}
+function restoreAttributes(element, attributes) {
+  for (const attribute of [...element.attributes]) element.removeAttribute(attribute.name);
+  for (const [key, value] of attributes) element.setAttribute(key, value);
+}
+function rerouteConflictGroup(svg) {
+  const original = collectEdges(svg), pairs = crossingPairs(original);
+  const ids = new Set(pairs.flatMap((pair) => [pair.a, pair.b]));
+  if (!ids.size || ids.size > 40) return false;
+  const movable = original.filter((e) => ids.has(e.id) && e.source && e.target && e.source !== e.target && !e.shared);
+  const fixed = original.filter((e) => !movable.includes(e));
+  const saved = [...movable.map((e) => e.element), ...geometry(svg).labels.map((l) => l.element)].map((element) => ({ element, attributes: snapshotAttributes(element) }));
+  const restore = () => saved.forEach(({ element, attributes }) => restoreAttributes(element, attributes));
+  let bestCount = pairs.length, bestState;
+  const length = (edge) => edge.element.getTotalLength();
+  const orders = [
+    movable.slice().sort((a, b) => length(a) - length(b)),
+    movable.slice().sort((a, b) => length(b) - length(a))
+  ];
+  for (const order of orders) {
+    restore();
+    const placed = fixed.slice(), pending = new Set(movable.map((e) => e.id));
+    for (const edge of order) {
+      const model = geometry(svg);
+      model.labels = model.labels.filter((l) => l.id === edge.id || !pending.has(l.id));
+      const plan = planAvoidance(svg, edge, [...placed, edge], model, true);
+      if (plan) {
+        writePoints(svg, edge.element, plan.points);
+        applyReservation(svg, edge, plan.reservation);
+        edge.element.setAttribute("data-gptm-crossing-rerouted", "true");
+      }
+      pending.delete(edge.id);
+      placed.push(collectEdges(svg).find((e) => e.id === edge.id));
+    }
+    const next = crossingPairs(collectEdges(svg)).length;
+    if (next < bestCount) {
+      bestCount = next;
+      bestState = saved.map(({ element }) => ({ element, attributes: snapshotAttributes(element) }));
+    }
+  }
+  restore();
+  if (!bestState) return false;
+  bestState.forEach(({ element, attributes }) => restoreAttributes(element, attributes));
+  return true;
+}
+function translateInRoot(svg, element, dx, dy) {
+  const a = fromSvg(svg, element.parentElement, { x: 0, y: 0 });
+  const b = fromSvg(svg, element.parentElement, { x: dx, y: dy });
+  element.setAttribute("transform", `translate(${b.x - a.x},${b.y - a.y}) ${element.getAttribute("transform") || ""}`.trim());
+}
+function expandFlatSpacing(svg, factor) {
+  const { nodes, labels } = geometry(svg), edges = collectEdges(svg);
+  if (!nodes.length || svg.querySelector("g.cluster,g.note,.c4-boundary") || nodes.some((n) => n.element.parentElement.closest("g.node")) || edges.some((e) => !e.source || !e.target || !triangleCompatible(e.element))) return false;
+  const origin = { x: Math.min(...nodes.map((n) => n.box.x)), y: Math.min(...nodes.map((n) => n.box.y)) };
+  const map = (p) => ({ x: origin.x + (p.x - origin.x) * factor, y: origin.y + (p.y - origin.y) * factor });
+  const shifts = new Map(nodes.map((node) => {
+    const p = { x: (node.box.x + node.box.right) / 2, y: (node.box.y + node.box.bottom) / 2 }, q = map(p);
+    return [node.id, { x: q.x - p.x, y: q.y - p.y }];
+  }));
+  for (const edge of edges) {
+    if (!shifts.has(edge.source) || !shifts.has(edge.target)) return false;
+    if (!edge.controls || edge.controls.length < 2) return false;
+  }
+  for (const node of nodes) {
+    const shift2 = shifts.get(node.id);
+    translateInRoot(svg, node.element, shift2.x, shift2.y);
+  }
+  for (const label of labels) {
+    const p = { x: (label.box.x + label.box.right) / 2, y: (label.box.y + label.box.bottom) / 2 }, q = map(p);
+    translateInRoot(svg, label.element, q.x - p.x, q.y - p.y);
+  }
+  for (const edge of edges) {
+    const raw = edge.controls, points = raw.map(map);
+    for (const start of [true, false]) {
+      const i = start ? 0 : points.length - 1, j = start ? 1 : points.length - 2;
+      const shift2 = shifts.get(start ? edge.source : edge.target);
+      points[i] = { x: raw[i].x + shift2.x, y: raw[i].y + shift2.y };
+      if (points.length > 2) {
+        if (Math.abs(raw[i].x - raw[j].x) < 0.1) points[j].x = points[i].x;
+        if (Math.abs(raw[i].y - raw[j].y) < 0.1) points[j].y = points[i].y;
+      }
+    }
+    writePoints(svg, edge.element, points);
+    edge.element.removeAttribute("data-gptm-label-x");
+    edge.element.removeAttribute("data-gptm-label-y");
+  }
+  return true;
+}
+function resolveEdgeCrossings(svg, repairConnections) {
+  ROUTING_BUDGETS.set(svg, { remaining: 3e4 });
+  const first = avoidEdgeCrossings(svg);
+  if (first.changed) {
+    repairConnections(svg);
+    placeEdgeLabels(svg);
+  }
+  let remaining = crossingPairs(collectEdges(svg)).length;
+  if (remaining && !exceedsPlanarEdgeBound(collectEdges(svg)) && rerouteConflictGroup(svg)) {
+    repairConnections(svg);
+    placeEdgeLabels(svg);
+    remaining = crossingPairs(collectEdges(svg)).length;
+  }
+  let expanded = 1;
+  if (remaining > 0 && !exceedsPlanarEdgeBound(collectEdges(svg))) {
+    const baseline = svg.cloneNode(true);
+    const restore = () => {
+      for (const attribute of [...svg.attributes]) svg.removeAttribute(attribute.name);
+      for (const attribute of baseline.attributes) svg.setAttribute(attribute.name, attribute.value);
+      svg.replaceChildren(...[...baseline.childNodes].map((node) => node.cloneNode(true)));
+    };
+    for (const factor of [1.45, 2]) {
+      restore();
+      if (!expandFlatSpacing(svg, factor)) break;
+      repairConnections(svg);
+      placeEdgeLabels(svg);
+      avoidEdgeCrossings(svg);
+      rerouteConflictGroup(svg);
+      repairConnections(svg);
+      placeEdgeLabels(svg);
+      const count = crossingPairs(collectEdges(svg)).length;
+      if (count < remaining) {
+        remaining = count;
+        expanded = factor;
+        break;
+      }
+    }
+    if (expanded === 1) restore();
+  }
+  svg.setAttribute("data-gptm-crossings-before", String(first.before));
+  svg.setAttribute("data-gptm-spacing-factor", String(expanded));
+  svg.setAttribute("data-gptm-routing-budget-exhausted", String(ROUTING_BUDGETS.get(svg).remaining <= 0));
+  return { ...first, remaining, expanded };
+}
+function exceedsPlanarEdgeBound(edges) {
+  const vertices = /* @__PURE__ */ new Set(), links = /* @__PURE__ */ new Set();
+  for (const edge of edges) {
+    if (!edge.source || !edge.target) return false;
+    vertices.add(edge.source);
+    vertices.add(edge.target);
+    if (edge.source !== edge.target) links.add([edge.source, edge.target].sort().join("\0"));
+  }
+  return vertices.size >= 3 && links.size > 3 * vertices.size - 6;
+}
+var EDGE_SELECTOR, GAP, ROUTING_BUDGETS, norm, vector, segments, boxOf, overlaps2;
+var init_svg_crossings = __esm({
+  "src/svg-crossings.js"() {
+    init_path_intersections();
+    init_svg_routing();
+    init_svg_labels();
+    EDGE_SELECTOR = ".flowchart-link,.transition,.relation,.relationshipLine,[data-gptm-source]";
+    GAP = 12;
+    ROUTING_BUDGETS = /* @__PURE__ */ new WeakMap();
+    norm = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    vector = (a, b) => ({ x: b.x - a.x, y: b.y - a.y });
+    segments = (points) => points.slice(1).flatMap((p, i) => p.move ? [] : [[points[i], p]]);
+    boxOf = (points) => ({
+      x: Math.min(...points.map((p) => p.x)),
+      y: Math.min(...points.map((p) => p.y)),
+      right: Math.max(...points.map((p) => p.x)),
+      bottom: Math.max(...points.map((p) => p.y))
+    });
+    overlaps2 = (a, b) => a.x <= b.right && a.right >= b.x && a.y <= b.bottom && a.bottom >= b.y;
   }
 });
 
@@ -1844,19 +2511,19 @@ function nodeOutlines(svg) {
     if (!shape || typeof shape.isPointInFill !== "function") return null;
     const geometries = container instanceof SVGGeometryElement ? [container] : [...container.querySelectorAll("path,rect,polygon,circle,ellipse")];
     const box = shape.getBoundingClientRect();
-    const painted = geometries.map((geometry) => {
-      const style = getComputedStyle(geometry);
-      return { geometry, fill: style.fill !== "none", stroke: style.stroke !== "none" };
+    const painted = geometries.map((geometry2) => {
+      const style = getComputedStyle(geometry2);
+      return { geometry: geometry2, fill: style.fill !== "none", stroke: style.stroke !== "none" };
     });
-    const contains = (point) => painted.some(({ geometry, fill, stroke }) => {
-      const local = toLocal(geometry, point);
+    const contains = (point) => painted.some(({ geometry: geometry2, fill, stroke }) => {
+      const local = toLocal(geometry2, point);
       if (!local) return false;
       const probe = new DOMPoint(local.x, local.y);
-      return fill && geometry.isPointInFill(probe) || stroke && geometry.isPointInStroke(probe);
+      return fill && geometry2.isPointInFill(probe) || stroke && geometry2.isPointInStroke(probe);
     });
-    const area = (point) => geometries.some((geometry) => {
-      const local = toLocal(geometry, point);
-      return local && geometry.isPointInFill(new DOMPoint(local.x, local.y));
+    const area = (point) => geometries.some((geometry2) => {
+      const local = toLocal(geometry2, point);
+      return local && geometry2.isPointInFill(new DOMPoint(local.x, local.y));
     });
     const fullBox = container.getBoundingClientRect();
     return box.width > 0 && box.height > 0 ? { node, shape, box: fullBox, contains, area } : null;
@@ -1872,16 +2539,16 @@ function boundaryDistance(point, box) {
 function contourIntersection(anchor, adjacent, outlines, authoritative = false) {
   const magnitude = Math.hypot(anchor.x - adjacent.x, anchor.y - adjacent.y);
   if (!magnitude) return null;
-  const vector = { x: (anchor.x - adjacent.x) / magnitude, y: (anchor.y - adjacent.y) / magnitude };
+  const vector2 = { x: (anchor.x - adjacent.x) / magnitude, y: (anchor.y - adjacent.y) / magnitude };
   const candidates = outlines.filter(({ box, contains }) => {
     if (authoritative) return true;
     if (boundaryDistance(anchor, box) < 1.5) return true;
-    return !contains({ x: anchor.x - vector.x * 2, y: anchor.y - vector.y * 2 }) && contains({ x: anchor.x + vector.x * 2, y: anchor.y + vector.y * 2 });
+    return !contains({ x: anchor.x - vector2.x * 2, y: anchor.y - vector2.y * 2 }) && contains({ x: anchor.x + vector2.x * 2, y: anchor.y + vector2.y * 2 });
   }).sort((a, b) => a.box.width * a.box.height - b.box.width * b.box.height);
   for (const { box, contains, area } of candidates) {
-    const position = (distance2) => ({ x: anchor.x + vector.x * distance2, y: anchor.y + vector.y * distance2 });
+    const position = (distance2) => ({ x: anchor.x + vector2.x * distance2, y: anchor.y + vector2.y * distance2 });
     const inside = (distance2) => area(position(distance2));
-    const reach = Math.max(4, Math.abs(vector.x) * box.width + Math.abs(vector.y) * box.height);
+    const reach = Math.max(4, Math.abs(vector2.x) * box.width + Math.abs(vector2.y) * box.height);
     let outside = -2;
     if (inside(outside)) continue;
     let hit = null;
@@ -2080,11 +2747,13 @@ function postProcessSvg(svgMarkup, variables, graph, config = {}) {
     repairEdgeConnections(live);
     repairSequenceConnections(live);
     placeEdgeLabels(live);
+    resolveEdgeCrossings(live, repairEdgeConnections);
     if (graph || Number(live.getAttribute("data-gptm-native-routes")) > 0) fitSvgBounds(live);
     colorDirectionalEdges(live, variables);
     const shafts = trimArrowShafts(live);
     live.setAttribute("data-gptm-trimmed-shafts", String(shafts.trimmed));
     live.setAttribute("data-gptm-shaft-skips", String(shafts.skipped.length));
+    recordCrossings(live);
     return new XMLSerializer().serializeToString(live);
   });
   return measured || new XMLSerializer().serializeToString(svg);
@@ -2213,11 +2882,20 @@ function createRenderer(baseUrl2 = document.baseURI) {
       const processed = postProcessSvg(svg, config.themeVariables, graph, config);
       const clean = sanitizeSvgMarkup(processed);
       const size = svgSize(clean);
+      const root = new DOMParser().parseFromString(clean, "image/svg+xml").documentElement;
       return {
         svg: clean,
         width: size.width,
         height: size.height,
-        source
+        source,
+        routing: {
+          status: root.getAttribute("data-gptm-routing-status") || "not-applicable",
+          checkedEdges: Number(root.getAttribute("data-gptm-checked-edges")) || 0,
+          crossings: Number(root.getAttribute("data-gptm-crossings")) || 0,
+          crossingsBefore: Number(root.getAttribute("data-gptm-crossings-before")) || 0,
+          spacingFactor: Number(root.getAttribute("data-gptm-spacing-factor")) || 1,
+          reason: root.getAttribute("data-gptm-routing-reason") || ""
+        }
       };
     });
     renderChain = task.then(() => void 0, () => void 0);
@@ -2238,6 +2916,7 @@ var init_render = __esm({
     init_svg_routing();
     init_svg_c4();
     init_svg_adaptive();
+    init_svg_crossings();
     FLOWCHART_RE = /^\s*(?:flowchart|graph)\b/im;
     DIRECTION_KEYS = Object.freeze({
       right: "gptMermaidLineRight",
@@ -2403,8 +3082,8 @@ function createUi({ renderSvg, getConfig }) {
         if (!inViewer && !event.ctrlKey) return;
         event.preventDefault();
         const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? record.stage.clientHeight : 1;
-        const delta = Math.min(600, Math.max(-600, event.deltaY * unit));
-        zoom(record, record.zoom * Math.exp(-delta * 2e-3), false, { x: event.clientX, y: event.clientY });
+        const delta2 = Math.min(600, Math.max(-600, event.deltaY * unit));
+        zoom(record, record.zoom * Math.exp(-delta2 * 2e-3), false, { x: event.clientX, y: event.clientY });
       },
       down(event) {
         if (event.button !== 0 || !record.result) return;

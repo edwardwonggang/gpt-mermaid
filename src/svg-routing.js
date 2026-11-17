@@ -3,10 +3,12 @@
  * 调用方：render.js；依赖：结构化图数据、浏览器 SVG 几何。
  * 红线：不从边 ID 猜来源，不删除逻辑边；只有同方向同样式实线可共享末端。
  */
+import { segmentIntersection } from "./path-intersections.js";
 const NS = "http://www.w3.org/2000/svg";
 const EPS = 0.05;
 const PORT_GAP = 18;
 const CLEARANCE = 10;
+const BEND_COST = 22;
 const near = (a, b) => Math.abs(a - b) < EPS;
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -57,6 +59,39 @@ export function simplifyPoints(points) {
   return result;
 }
 
+// 评价完整路径（包含端口引线），不能只评价两段独立寻路的结果。
+// 反向重走不能靠删折点掩盖；自交/重复段候选必须被拒绝。
+export function routeQuality(input) {
+  const invalid = { length: Infinity, bends: 0, selfIntersections: 0, retraces: 0, score: Infinity };
+  if (!Array.isArray(input) || input.some((p) => !p || !Number.isFinite(p.x) || !Number.isFinite(p.y))) return invalid;
+  const points = simplifyPoints(input);
+  if (points.length < 2) return invalid;
+  let length = 0, selfIntersections = 0, retraces = 0;
+  const cross = (a, b) => a.x * b.y - a.y * b.x;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1], b = points[i], v = { x: b.x - a.x, y: b.y - a.y };
+    length += distance(a, b);
+    for (let j = i + 1; j < points.length; j++) {
+      const c = points[j - 1], d = points[j], w = { x: d.x - c.x, y: d.y - c.y };
+      const offset = { x: c.x - a.x, y: c.y - a.y }, determinant = cross(v, w);
+      if (Math.abs(determinant) < EPS) {
+        if (Math.abs(cross(offset, v)) > EPS) continue;
+        const axis = Math.abs(v.x) > Math.abs(v.y) ? "x" : "y";
+        const overlap = Math.min(Math.max(a[axis], b[axis]), Math.max(c[axis], d[axis]))
+          - Math.max(Math.min(a[axis], b[axis]), Math.min(c[axis], d[axis]));
+        if (overlap > EPS) retraces++;
+        else if (overlap >= -EPS && j > i + 1) selfIntersections++;
+      } else if (j > i + 1) {
+        const t = cross(offset, w) / determinant, u = cross(offset, v) / determinant;
+        if (t >= -1e-7 && t <= 1 + 1e-7 && u >= -1e-7 && u <= 1 + 1e-7) selfIntersections++;
+      }
+    }
+  }
+  const bends = Math.max(0, points.length - 2);
+  return { length, bends, selfIntersections, retraces,
+    score: selfIntersections || retraces ? Infinity : length + bends * BEND_COST };
+}
+
 export function roundedPath(input, radius = 7) {
   const points = simplifyPoints(input);
   if (points.length < 2) return "";
@@ -100,9 +135,9 @@ function clearRoute(points, boxes, pad = 0) {
 }
 
 // 确定性的正交可见网格，路径代价同时考虑距离与弯折；不移动节点掩盖穿框。
-export function orthogonalRoute(start, end, boxes, clearance = CLEARANCE, occupied = []) {
-  const xs = [...new Set([start.x, end.x, ...boxes.flatMap((b) => [b.x - clearance, b.right + clearance])])].sort((a, b) => a - b);
-  const ys = [...new Set([start.y, end.y, ...boxes.flatMap((b) => [b.y - clearance, b.bottom + clearance])])].sort((a, b) => a - b);
+export function orthogonalRoute(start, end, boxes, clearance = CLEARANCE, occupied = [], directions = {}) {
+  const xs = [...new Set([start.x, end.x, ...(directions.extraX || []), ...boxes.flatMap((b) => [b.x - clearance, b.right + clearance])])].sort((a, b) => a - b);
+  const ys = [...new Set([start.y, end.y, ...(directions.extraY || []), ...boxes.flatMap((b) => [b.y - clearance, b.bottom + clearance])])].sort((a, b) => a - b);
   // 超大密图保留上游布局，不建立无界网格。
   if (xs.length * ys.length > 40000) return null;
   const startIndex = ys.indexOf(start.y) * xs.length + xs.indexOf(start.x);
@@ -116,18 +151,30 @@ export function orthogonalRoute(start, end, boxes, clearance = CLEARANCE, occupi
   const pop = () => { const first = queue[0], last = queue.pop(); if (queue.length) { let i = 0;
     while (i * 2 + 1 < queue.length) { let j = i * 2 + 1; if (j + 1 < queue.length && queue[j + 1].priority < queue[j].priority) j++;
       if (queue[j].priority >= last.priority) break; queue[i] = queue[j]; i = j; } queue[i] = last; } return first; };
-  for (const axis of [0, 1]) { const key = startIndex * 2 + axis; costs.set(key, 0); push({ index: startIndex, axis, key, cost: 0, priority: estimate(startIndex) }); }
+  const axisOf = (v) => Math.abs(v.x) > Math.abs(v.y) ? 0 : 1;
+  for (const axis of directions.start ? [axisOf(directions.start)] : [0, 1]) {
+    const key = startIndex * 2 + axis;
+    costs.set(key, 0); push({ index: startIndex, axis, key, cost: 0, priority: estimate(startIndex) });
+  }
   let finish;
+  let visited = 0;
   while (queue.length) {
     const current = pop();
     if (current.cost !== costs.get(current.key)) continue;
+    if (++visited > (directions.maxVisited || 80000)) return null;
+    if (directions.budget && --directions.budget.remaining < 0) return null;
     if (current.index === endIndex) { finish = current.key; break; }
     const x = current.index % xs.length, y = Math.floor(current.index / xs.length);
     for (const [nx, ny, axis] of [[x - 1, y, 0], [x + 1, y, 0], [x, y - 1, 1], [x, y + 1, 1]]) {
       if (nx < 0 || nx >= xs.length || ny < 0 || ny >= ys.length) continue;
       const index = ny * xs.length + nx, a = point(current.index), b = point(index);
+      const movement = { x: b.x - a.x, y: b.y - a.y };
+      const backwards = (v) => v && movement.x * v.x + movement.y * v.y < -EPS;
+      if (current.index === startIndex && backwards(directions.start)
+          || index === endIndex && backwards(directions.end)) continue;
       const segmentKey = current.index < index ? `${current.index}:${index}` : `${index}:${current.index}`;
-      if (!visibility.has(segmentKey)) visibility.set(segmentKey, !segmentBlocked(a, b, boxes));
+      if (!visibility.has(segmentKey)) visibility.set(segmentKey, !segmentBlocked(a, b, boxes)
+        && !(directions.avoidSegments || []).some(([p, q]) => segmentIntersection(a, b, p, q)));
       if (!visibility.get(segmentKey)) continue;
       let congestion = congestionCache.get(segmentKey);
       if (congestion === undefined) {
@@ -143,7 +190,8 @@ export function orthogonalRoute(start, end, boxes, clearance = CLEARANCE, occupi
         }
         congestionCache.set(segmentKey, congestion);
       }
-      const cost = current.cost + distance(a, b) + (axis === current.axis ? 0 : 22) + congestion;
+      const cost = current.cost + distance(a, b) + (axis === current.axis ? 0 : BEND_COST) + congestion
+        + (index === endIndex && directions.end && axis !== axisOf(directions.end) ? BEND_COST : 0);
       const key = index * 2 + axis;
       if (cost >= (costs.get(key) ?? Infinity)) continue;
       costs.set(key, cost); parents.set(key, current.key); push({ index, axis, key, cost, priority: cost + estimate(index) });
@@ -334,6 +382,43 @@ export function asPath(element) {
   return path;
 }
 
+const boxesOverlap = (a, b) => a.x < b.right && a.right > b.x && a.y < b.bottom && a.bottom > b.y;
+function nativeLabelBox(center, size) {
+  // 包含胶囊描边和与其它线的空隙；该保留区也交给后续边避障。
+  return { x: center.x - size.width / 2 - 7, y: center.y - size.height / 2 - 7,
+    right: center.x + size.width / 2 + 7, bottom: center.y + size.height / 2 + 7 };
+}
+
+export function labelOnRoute(svg, points, size, barriers, occupied, original) {
+  const old = { x: size.x + size.width / 2, y: size.y + size.height / 2 }, candidates = [];
+  const add = (point) => {
+    const box = nativeLabelBox(point, size);
+    if (barriers.some((b) => boxesOverlap(box, b))
+        || occupied.some(([a, b]) => segmentBlocked(a, b, [box], 2))) return;
+    // DOMPoint 的 x/y 是原型访问器，展开对象会丢坐标。
+    candidates.push({ x: point.x, y: point.y, box, score: distance(point, old) });
+  };
+  if (original?.getTotalLength) {
+    // 上游可能是曲线，保留原 d 时必须用真实路径采样，不能把控制折线当可见线。
+    const length = original.getTotalLength(), steps = Math.min(1000, Math.max(20, Math.ceil(length / 5)));
+    for (let i = 1; i < steps; i++) add(inSvg(svg, original, original.getPointAtLength(length * i / steps)));
+  } else {
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1], b = points[i], length = distance(a, b);
+      if (length < 1) continue;
+      // 胶囊可以放在纵线，文字仍水平；避开转角处的圆弧，中心必须真正落在线上。
+      const margin = 8, lo = margin / length, hi = 1 - lo;
+      if (lo > hi) continue;
+      const projection = ((old.x - a.x) * (b.x - a.x) + (old.y - a.y) * (b.y - a.y)) / (length * length);
+      const samples = new Set([Math.max(lo, Math.min(hi, projection)), 0.5]);
+      const steps = Math.min(200, Math.ceil(length / 8));
+      for (let j = 0; j <= steps; j++) samples.add(lo + (hi - lo) * j / steps);
+      for (const t of samples) add({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+    }
+  }
+  return candidates.sort((a, b) => a.score - b.score)[0];
+}
+
 // 原生状态/类图可能从同一个斜向端口同时进出。仅处理实际渲染时带身份的边，
 // 不重新解析有全局domId计数的类图，也不改变菱形/基数/lollipop端点的偏移契约。
 export function routeNativeEdges(svg) {
@@ -371,6 +456,7 @@ export function routeNativeEdges(svg) {
   for (const group of groups.values()) {
     if (group.length < 2 || group.some((port) => !port.edge.compatible)) continue;
     group.sort((a, b) => a.value - b.value);
+    if (!group.some((port, i) => i && port.value - group[i - 1].value < PORT_GAP)) continue;
     const { node, side } = group[0], box = node.box, horizontal = horizontalSide(side);
     const span = horizontal ? box.height : box.width, low = horizontal ? box.y : box.x;
     const margin = Math.min(12, span * 0.2), spacing = Math.min(24, (span - margin * 2) / (group.length - 1));
@@ -393,14 +479,30 @@ export function routeNativeEdges(svg) {
   ]));
   const reservedLabels = [];
   const shields = [...ports.values()].filter((port) => port.edge.compatible).map((port) => {
-    const half = Math.min(9, port.spacing * 0.38), p = port.anchor, horizontal = horizontalSide(port.side);
-    const distance = 20, out = signOf(port.side) * distance;
+    const arrow = port.edge.element.hasAttribute(port.start ? "marker-start" : "marker-end");
+    const half = arrow ? Math.min(9, port.spacing * 0.38) : 2.5, p = port.anchor, horizontal = horizontalSide(port.side);
+    // 无箭头出线只留描边间隔；把它当20单位箭头会封死上下节点之间的正常标签位置。
+    const distance = arrow ? 20 : 6, out = signOf(port.side) * distance;
     const x = horizontal ? Math.min(p.x, p.x + out) : p.x - half;
     const y = horizontal ? p.y - half : Math.min(p.y, p.y + out);
     return { edge: port.edge, x, y, right: x + (horizontal ? distance : half * 2),
       bottom: y + (horizontal ? half * 2 : distance) };
   });
-  for (const edge of edges.filter((edge) => edge.compatible)) {
+  const approaches = [...ports.values()].filter((port) => port.edge.compatible).map((port) => {
+    const p = port.anchor, horizontal = horizontalSide(port.side), out = signOf(port.side) * 24;
+    return { edge: port.edge, x: horizontal ? Math.min(p.x, p.x + out) : p.x - 2.5,
+      right: horizontal ? Math.max(p.x, p.x + out) : p.x + 2.5,
+      y: horizontal ? p.y - 2.5 : Math.min(p.y, p.y + out),
+      bottom: horizontal ? p.y + 2.5 : Math.max(p.y, p.y + out) };
+  });
+  const labelSizes = new Map(edges.map((edge) => {
+    const label = labelById.get(edge.element.dataset.id);
+    return [edge, label?.textContent.trim() ? boundsInSvg(svg, label) : null];
+  }));
+  // 先给更宽的标签分配有限空隙；小标签通常能沿剩余路径移动。
+  const routingOrder = edges.filter((edge) => edge.compatible)
+    .sort((a, b) => (labelSizes.get(b)?.width || 0) - (labelSizes.get(a)?.width || 0));
+  for (const edge of routingOrder) {
     if (edge.source === edge.target) continue;
     const a = ports.get(`${edge.element.id}:true`), b = ports.get(`${edge.element.id}:false`);
     const lead = (port) => {
@@ -410,49 +512,68 @@ export function routeNativeEdges(svg) {
     };
     // 包围盒侧面只用于布局锚点；render.js 随后按精确归属求真实轮廓接触点。
     const start = lead(a), end = lead(b);
-    const barriers = [...boxes, ...shields.filter((shield) => shield.edge !== edge), ...reservedLabels];
-    const label = labelById.get(edge.element.dataset.id);
-    let route, reservation;
-    if (label?.textContent.trim()) {
-      const labelBox = boundsInSvg(svg, label);
-      const center = { x: labelBox.x + labelBox.width / 2, y: labelBox.y + labelBox.height / 2 };
-      const candidates = [];
-      // 标签必须拥有一段足够宽的独占水平通道；空间不足时扩展路线，不缩字或盖线。
-      for (let row = -8; row <= 8; row++) for (let column = -8; column <= 8; column++) {
-        const x = center.x + column * 22, y = center.y + row * 18;
-        const box = { x: x - labelBox.width / 2 - 7, y: y - labelBox.height / 2 - 7,
-          right: x + labelBox.width / 2 + 7, bottom: y + labelBox.height / 2 + 7 };
-        if (barriers.some((b) => box.x < b.right && box.right > b.x && box.y < b.bottom && box.bottom > b.y)) continue;
-        if (occupied.some(([p, q]) => segmentBlocked(p, q, [box], 2))) continue;
-        candidates.push({ x, y, box, score: Math.hypot(x - center.x, y - center.y) });
+    const foreignShields = shields.filter((shield) => shield.edge !== edge);
+    const barriers = [...boxes, ...foreignShields, ...reservedLabels];
+    const labelBarriers = [...boxes, ...shields, ...approaches.filter((item) => item.edge !== edge), ...reservedLabels];
+    const foreign = [...nodes.values()].filter((node) => node !== edge.source && node !== edge.target).map((node) => node.box);
+    const completeBarriers = [...foreign, ...foreignShields, ...reservedLabels];
+    const size = labelSizes.get(edge);
+    const vector = (a, b) => ({ x: b.x - a.x, y: b.y - a.y });
+    const directions = { start: vector(a.anchor, start), end: vector(end, b.anchor) };
+    let best;
+    const consider = (points, original = false) => {
+      const quality = routeQuality(points);
+      if (!Number.isFinite(quality.score) || !clearRoute(points, completeBarriers)) return;
+      const reservation = size && labelOnRoute(svg, points, size, labelBarriers, occupied, original && edge.element);
+      if (size && !reservation) return;
+      const score = quality.score + (reservation?.score || 0) * 0.02;
+      if (!best || score < best.score) best = { points, reservation, score, original };
+    };
+    // 正常原线优先保留；端口冲突、路径穿障碍或标签确实无处放才进入寻路。
+    if (!changed.has(edge)) consider(edge.points, true);
+    if (!best) {
+      const route = orthogonalRoute(start, end, barriers, CLEARANCE, occupied, directions);
+      if (route) consider(simplifyPoints([a.anchor, ...route, b.anchor]));
+    }
+    if (!best && size) {
+      const center = { x: size.x + size.width / 2, y: size.y + size.height / 2 }, candidates = [];
+      // 仅在原线与最短避障线均容不下标签时有界扩展。按整条路的长度下界选候选，
+      // 水平/纵向通道都允许，不能为了水平文字强迫一条纵线绕圈。
+      for (let row = -6; row <= 6; row++) for (let column = -6; column <= 6; column++) {
+        const point = { x: center.x + column * 22, y: center.y + row * 18 }, box = nativeLabelBox(point, size);
+        if (labelBarriers.some((b) => boxesOverlap(box, b))
+            || occupied.some(([p, q]) => segmentBlocked(p, q, [box], 2))) continue;
+        candidates.push({ ...point, box, score: distance(start, point) + distance(point, end) });
       }
       candidates.sort((a, b) => a.score - b.score);
-      for (const candidate of candidates.slice(0, 20)) {
-        const left = { x: candidate.box.x - 6, y: candidate.y }, right = { x: candidate.box.right + 6, y: candidate.y };
-        const forward = distance(start, left) + distance(end, right) <= distance(start, right) + distance(end, left);
-        const enter = forward ? left : right, exit = forward ? right : left;
-        const withLabel = [...barriers, candidate.box];
-        const before = orthogonalRoute(start, enter, withLabel, 10, occupied);
-        const after = orthogonalRoute(exit, end, withLabel, 10, occupied);
-        if (!before || !after) continue;
-        route = [...before, ...after]; reservation = candidate;
-        break;
+      for (const candidate of candidates.slice(0, 16)) for (const horizontal of [true, false]) {
+        // 自己的胶囊不是自己的障碍。只保留跨过中心的直段供文字落线，
+        // 若绕胶囊外框再进入，会在短边两端各制造一个无意义的回弯。
+        const first = horizontal ? { x: candidate.x - 8, y: candidate.y } : { x: candidate.x, y: candidate.y - 8 };
+        const last = horizontal ? { x: candidate.x + 8, y: candidate.y } : { x: candidate.x, y: candidate.y + 8 };
+        const forward = distance(start, first) + distance(end, last) <= distance(start, last) + distance(end, first);
+        const enter = forward ? first : last, exit = forward ? last : first, through = vector(enter, exit);
+        const before = orthogonalRoute(start, enter, barriers, CLEARANCE, occupied, { start: directions.start, end: through });
+        const after = orthogonalRoute(exit, end, barriers, CLEARANCE, occupied, { start: through, end: directions.end });
+        if (before && after) consider(simplifyPoints([a.anchor, ...before, ...after, b.anchor]));
       }
     }
-    route ||= orthogonalRoute(start, end, barriers, 10, occupied);
-    if (!route) continue;
-    const points = [a.anchor, ...route, b.anchor];
-    const foreign = [...nodes.values()].filter((node) => node !== edge.source && node !== edge.target).map((node) => node.box);
-    // 路由器只接收引线外端；拼回节点后的短引线也必须验，否则近端障碍会漏检。
-    if (!clearRoute(points, [...foreign, ...shields.filter((shield) => shield.edge !== edge), ...reservedLabels])) continue;
-    writePoints(svg, edge.element, points);
+    if (!best) {
+      // 搜索失败保持上游几何，并让后续边知道它仍占用空间。
+      for (let i = 1; i < edge.points.length; i++) occupied.push([edge.points[i - 1], edge.points[i]]);
+      continue;
+    }
+    const { points, reservation } = best;
+    if (!best.original) {
+      writePoints(svg, edge.element, points);
+      edge.element.setAttribute("data-gptm-native-rerouted", "true");
+    }
     for (let i = 1; i < points.length; i++) occupied.push([points[i - 1], points[i]]);
     if (reservation) {
       reservedLabels.push(reservation.box);
       edge.element.setAttribute("data-gptm-label-x", String(reservation.x));
       edge.element.setAttribute("data-gptm-label-y", String(reservation.y));
     }
-    edge.element.setAttribute("data-gptm-native-rerouted", "true");
   }
   svg.setAttribute("data-gptm-native-routes", String(edges.filter((e) => e.element.hasAttribute("data-gptm-native-rerouted")).length));
 }

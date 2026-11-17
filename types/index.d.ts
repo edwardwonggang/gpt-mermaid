@@ -29,6 +29,14 @@ export interface GPTMermaidRenderResult {
   width: number;
   height: number;
   source: string;
+  routing: {
+    status: "clear" | "unresolved" | "not-applicable";
+    checkedEdges: number;
+    crossings: number;
+    crossingsBefore: number;
+    spacingFactor: number;
+    reason: "" | "non-planar-edge-bound" | "search-budget" | "fixed-obstacles";
+  };
 }
 
 export interface GPTMermaidDiagram {
