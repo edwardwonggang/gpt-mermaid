@@ -1,4 +1,10 @@
 /* 职责：gpt-mermaid 的 ChatGPT 风格内联图表样式。 */
+html.mgpt-scroll-locked,
+body.mgpt-scroll-locked {
+  overflow: hidden !important;
+  overscroll-behavior: none !important;
+  scrollbar-gutter: stable;
+}
 .mgpt-diagram {
   position: relative;
   display: block;
@@ -112,6 +118,7 @@
   font-size: 12px;
   line-height: 1.6;
 }
+.mgpt-status[data-kind="error"],
 .mgpt-diagram[data-state="error"] .mgpt-status { color: #a44c32; }
 .mgpt-retry {
   margin: 0 16px 12px;
@@ -140,7 +147,7 @@
   min-height: 112px;
   overflow: hidden;
   cursor: grab;
-  touch-action: pan-y;
+  touch-action: pan-y pinch-zoom;
   user-select: none;
 }
 .mgpt-stage[data-dragging="true"] { cursor: grabbing; }
@@ -177,6 +184,7 @@
   color: #263244;
   box-shadow: 0 8px 32px #1b2b4212;
   overflow: hidden;
+  overscroll-behavior: contain;
 }
 .mgpt-dialog::backdrop { background: #0006; }
 .mgpt-dialog[open] { display: flex; flex-direction: column; }
@@ -188,11 +196,30 @@
   padding: 5px 8px;
   border-bottom: 1px solid #f1f4f8;
   background: #fafbfd;
+  touch-action: none;
 }
 .mgpt-dialog-actions { display: flex; align-items: center; gap: 2px; }
 .mgpt-dialog-bar > [data-mgpt-action="close"] { margin-left: auto; }
-.mgpt-dialog-viewport { flex: 1; min-height: 0; }
-.mgpt-dialog-viewport .mgpt-stage { height: 100%; min-height: 100%; }
+.mgpt-zoom-status {
+  min-width: 58px;
+  color: #626f82;
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.mgpt-dialog-viewport { flex: 1; min-height: 0; overscroll-behavior: contain; }
+.mgpt-dialog-viewport .mgpt-stage {
+  height: 100%;
+  min-height: 100%;
+  /* 全屏才接管触屏，避免浏览器纵向滚动取消单指平移/双指缩放。 */
+  touch-action: none;
+}
+@media (pointer: coarse) {
+  .mgpt-icon-button { width: 44px; height: 44px; }
+  .mgpt-menuitem { min-height: 44px; }
+  .mgpt-retry { min-width: 44px; min-height: 44px; }
+}
 @media (max-width: 900px) {
   .mgpt-diagram[data-wide="true"] {
     width: 100%;
@@ -205,4 +232,10 @@
   .mgpt-diagram { margin: 14px 0; }
   .mgpt-viewport { padding: 4px 0; }
   .mgpt-dialog { width: calc(100vw - 12px); height: calc(100dvh - 12px); }
+  .mgpt-diagram[data-state="error"] .mgpt-floatbar,
+  .mgpt-diagram[data-notice] .mgpt-floatbar {
+    position: static;
+    width: max-content;
+    margin: 4px 4px 0 auto;
+  }
 }

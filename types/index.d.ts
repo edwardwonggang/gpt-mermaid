@@ -4,6 +4,9 @@ export interface GPTMermaidConfig {
   fontFamily?: string;
   runtimeUrl?: string | null;
   baseUrl?: string | null;
+  signal?: AbortSignal;
+  renderTimeoutMs?: number;
+  runtimeTimeoutMs?: number;
   autoInjectStyles?: boolean;
   securityLevel?: "strict";
   menu?: boolean;
@@ -83,9 +86,3 @@ export const render: GPTMermaidApi["render"];
 export const renderAll: GPTMermaidApi["renderAll"];
 export const autoRender: GPTMermaidApi["autoRender"];
 export const destroy: GPTMermaidApi["destroy"];
-
-declare global {
-  interface Window {
-    GPTMermaid: GPTMermaidApi;
-  }
-}

@@ -8,6 +8,11 @@
 const SHAFT_MAX_SEGMENTS = 16384;
 const SHAFT_LENGTH_RE = /^([-+]?(?:\d*\.?\d+|\d+\.?\d*)(?:e[-+]?\d+)?)(px|%)?$/i;
 const SHAFT_TRIANGLE_RE = /^\s*M\s*0[\s,]+0\s*L\s*10[\s,]+4\s*L\s*0[\s,]+8\s*Z\s*$/i;
+// 虚线的相位可能正好在箭头底部留下空白；只补接头，不改变其余线段的相位。
+const SHAFT_TERMINAL_CONTACT = 3;
+// 浏览器dash光栅端与getPointAtLength在退化Bezier上可差约0.3单位。
+// 仅让线杆进入箭头宽底部，离尖端至少保留92%深度，防止高倍缩放出现断缝。
+const SHAFT_BASE_OVERLAP = 0.4;
 
 function triangleDepth(svg, edge, endpoint) {
   const id = (edge.getAttribute(`marker-${endpoint}`) || "").match(/^url\(#([^)]+)\)$/)?.[1];
@@ -93,6 +98,53 @@ function clippedSegments(length, head, tail, pattern, offset) {
   return segments;
 }
 
+function arrowCoveredLength(edge, length, depth, start) {
+  if (!depth || typeof edge.getPointAtLength !== "function") return depth;
+  const point = (distance) => {
+    const p = edge.getPointAtLength(start ? distance : length - distance);
+    if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) throw new Error("invalid SVG point");
+    return p;
+  };
+  const tip = point(0), adjacent = point(Math.min(0.02, length));
+  const magnitude = Math.hypot(adjacent.x - tip.x, adjacent.y - tip.y);
+  if (!magnitude) return depth;
+  const v = { x: (adjacent.x - tip.x) / magnitude, y: (adjacent.y - tip.y) / magnitude };
+  const inside = (distance) => {
+    const p = point(distance), dx = p.x - tip.x, dy = p.y - tip.y;
+    const along = dx * v.x + dy * v.y, across = dx * v.y - dy * v.x;
+    return along >= -1e-5 && along <= depth && Math.abs(across) <= along * 0.4 + 1e-4;
+  };
+  // 深度沿切线，弧长沿曲线，二者只在直线相等。取从尖端向外的第一次离开，
+  // 避免曲线先离开再进入三角时，把本应可见的整段弧错误裁掉。
+  const limit = length, steps = Math.min(16384, Math.max(16, Math.ceil(limit / 0.25)));
+  let lo = 0;
+  for (let i = 1; i <= steps; i++) {
+    let hi = limit * i / steps;
+    if (inside(hi)) { lo = hi; continue; }
+    for (let j = 0; j < 22; j++) {
+      const mid = (lo + hi) / 2;
+      if (inside(mid)) lo = mid; else hi = mid;
+    }
+    return (lo + hi) / 2;
+  }
+  return length;
+}
+
+function connectTerminalSegments(segments, length, head, tail, contact) {
+  const end = length - tail;
+  if (head >= end) return segments;
+  const all = segments.slice();
+  if (head > 0) all.push([head, Math.min(end, head + contact)]);
+  if (tail > 0) all.push([Math.max(head, end - contact), end]);
+  all.sort((a, b) => a[0] - b[0]);
+  const merged = [];
+  for (const segment of all) {
+    if (merged.length && segment[0] <= merged.at(-1)[1]) merged.at(-1)[1] = Math.max(merged.at(-1)[1], segment[1]);
+    else merged.push(segment.slice());
+  }
+  return merged;
+}
+
 function encodeSegments(segments, length, scale) {
   // 起始为零长度“实段”，所以首个可见段前能表达任意长度空白。
   // 末尾空白单独大于整条路径，周期不可能在同一路径内回卷。
@@ -117,12 +169,12 @@ export function trimArrowShafts(svg) {
   const edges = [...svg.querySelectorAll("[data-gptm-direction]")];
   const byId = new Map(edges.map((edge) => [edge.getAttribute("data-id"), edge]));
   for (const edge of edges) {
-    const head = triangleDepth(svg, edge, "start");
+    const headDepth = triangleDepth(svg, edge, "start");
     // 共享末端只绘制一次 marker，但每条原始边的线杆都必须止于同一个三角底部。
     const sharedId = edge.getAttribute("data-gptm-shared-tip");
     const shared = sharedId ? byId.get(sharedId) : null;
-    const tail = triangleDepth(svg, shared || edge, "end");
-    if (!(head > 0 || tail > 0)) continue;
+    const tailDepth = triangleDepth(svg, shared || edge, "end");
+    if (!(headDepth > 0 || tailDepth > 0)) continue;
     const skip = (reason) => report.skipped.push({ id: edge.id || "", reason });
     if (edge.localName === "path" && ((edge.getAttribute("d") || "").match(/[Mm]/g)?.length || 0) > 1) {
       skip("multiple-subpaths");
@@ -159,11 +211,23 @@ export function trimArrowShafts(svg) {
       skip("unsupported-dash-length");
       continue;
     }
-    const segments = clippedSegments(length, head, tail, dash.pattern, dash.offset);
+    let head, tail;
+    try {
+      head = arrowCoveredLength(edge, length, headDepth, true);
+      tail = arrowCoveredLength(edge, length, tailDepth, false);
+      if (head > 0 && head < length) head = Math.max(0, head - Math.min(SHAFT_BASE_OVERLAP, head * .08));
+      if (tail > 0 && tail < length) tail = Math.max(0, tail - Math.min(SHAFT_BASE_OVERLAP, tail * .08));
+    } catch {
+      skip("geometry-unavailable");
+      continue;
+    }
+    let segments = clippedSegments(length, head, tail, dash.pattern, dash.offset);
     if (segments === null) {
       skip("dash-segment-budget");
       continue;
     }
+    const contact = Math.max(SHAFT_TERMINAL_CONTACT, (parseFloat(style.strokeWidth) || 1.6) * 1.5);
+    segments = connectTerminalSegments(segments, length, head, tail, contact);
     // 这是最终几何约束；必须压过图表 CSS 中的旧 dash/offset，避免视觉上又画回尖端。
     edge.style.setProperty("stroke-dasharray", encodeSegments(segments, length, scale), "important");
     edge.style.setProperty("stroke-dashoffset", "0", "important");

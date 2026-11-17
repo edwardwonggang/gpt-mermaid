@@ -32,8 +32,14 @@ test("provides built-in presets and merges configuration", () => {
 test("package metadata exposes browser and npm entrypoints", async () => {
   const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.equal(pkg.name, "gpt-mermaid");
-  assert.equal(pkg.exports["."].import, "./dist/gpt-mermaid.esm.js");
-  assert.equal(pkg.exports["."].require, "./dist/gpt-mermaid.cjs");
+  assert.deepEqual(pkg.exports["."].import, {
+    types: "./types/index.d.ts",
+    default: "./dist/gpt-mermaid.esm.js",
+  });
+  assert.deepEqual(pkg.exports["."].require, {
+    types: "./types/index.d.cts",
+    default: "./dist/gpt-mermaid.cjs",
+  });
   assert.equal(pkg.exports["./css"], "./dist/gpt-mermaid.css");
   assert(pkg.files.includes("demo/compatibility.html"));
 });

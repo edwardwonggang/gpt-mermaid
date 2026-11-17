@@ -8,17 +8,19 @@
   "unpkg": "./dist/gpt-mermaid.umd.js",
   "jsdelivr": "./dist/gpt-mermaid.umd.js",
   "style": "./dist/gpt-mermaid.css",
-  "types": "./types/index.d.ts",
+  "types": "./types/index.d.cts",
   "exports": {
     ".": {
-      "import": "./dist/gpt-mermaid.esm.js",
-      "require": "./dist/gpt-mermaid.cjs",
-      "default": "./dist/gpt-mermaid.umd.js"
+      "import": {
+        "types": "./types/index.d.ts",
+        "default": "./dist/gpt-mermaid.esm.js"
+      },
+      "require": {
+        "types": "./types/index.d.cts",
+        "default": "./dist/gpt-mermaid.cjs"
+      }
     },
     "./css": "./dist/gpt-mermaid.css",
-    "./runtime": "./dist/gpt-mermaid.runtime.min.js",
-    "./themes": "./dist/gpt-mermaid.themes.js",
-    "./arrows": "./dist/gpt-mermaid.arrows.js",
     "./package.json": "./package.json"
   },
   "files": [
@@ -60,6 +62,8 @@
     "build": "node scripts/build.mjs",
     "build:runtime": "node scripts/apply-patch.mjs",
     "check": "node --check dist/gpt-mermaid.umd.js && node --check dist/gpt-mermaid.esm.js && node --check dist/gpt-mermaid.cjs",
+    "test:api": "node --test test/api-package.test.mjs",
+    "test:api-types": "node scripts/test-api-types.mjs",
     "serve": "node scripts/serve.mjs",
     "test": "node --test test/*.test.mjs",
     "test:e2e": "node test/e2e.mjs",

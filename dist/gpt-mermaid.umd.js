@@ -233,8 +233,12 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
   var DIRECTIVE_RE = /%%\{[\s\S]*?\}%%/g;
   var INIT_RE = /^%%\{\s*(?:init|initialize)\s*:\s*(\{[\s\S]*\})\s*\}%%$/i;
   var SECURITY_RE = /["']?securityLevel["']?\s*:/i;
-  var CLICK_RE = /^\s*click\s+.*$/gim;
   var SVG_NS = "http://www.w3.org/2000/svg";
+  var XLINK_NS = "http://www.w3.org/1999/xlink";
+  var XML_NS = "http://www.w3.org/XML/1998/namespace";
+  var FRONTMATTER_RE = /^---[^\S\r\n]*(?:#[^\r\n]*)?\r?\n([\s\S]*?)^---[^\S\r\n]*(?:#[^\r\n]*)?(?=\r?\n|$)/m;
+  var FRONTMATTER_KEYS = /* @__PURE__ */ new Set(["title", "displayMode"]);
+  var STYLE_GROUP_RULES = /* @__PURE__ */ new Set(["media", "supports", "container", "layer", "scope", "starting-style"]);
   var SVG_TAGS = new Set("svg g a path defs symbol desc title text tspan textPath rect line polyline polygon circle ellipse marker pattern linearGradient radialGradient stop clipPath mask filter feBlend feColorMatrix feComponentTransfer feComposite feConvolveMatrix feDiffuseLighting feDisplacementMap feDistantLight feDropShadow feFlood feFuncA feFuncB feFuncG feFuncR feGaussianBlur feMerge feMergeNode feMorphology feOffset fePointLight feSpecularLighting feSpotLight feTile feTurbulence style image use switch".split(" "));
   var DENY_TAGS = /* @__PURE__ */ new Set(["script", "iframe", "object", "embed", "form", "input", "button", "textarea", "foreignObject", "image", "animate", "animateMotion", "animateTransform", "set"]);
   function safeURL(value) {
@@ -268,9 +272,308 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       return "";
     }
   }
+  function frontmatterKey(line, indent) {
+    const text = line.slice(indent);
+    let quote = "";
+    let escaped = false;
+    for (let index = 0; index < text.length; index++) {
+      const char = text[index];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (quote && char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (quote) {
+        if (char === quote) quote = "";
+        continue;
+      }
+      if (char === '"' || char === "'") {
+        quote = char;
+        continue;
+      }
+      if (char === ":") return text.slice(0, index).trim();
+    }
+    return "";
+  }
+  function allowedFrontmatterKey(key) {
+    return FRONTMATTER_KEYS.has(key) || /^"(?:title|displayMode)"$/.test(key) || /^'(?:title|displayMode)'$/.test(key);
+  }
+  function sanitizeFrontmatterContent(content) {
+    const eol = content.includes("\r\n") ? "\r\n" : "\n";
+    const trimmed = content.trim();
+    if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        const kept2 = [];
+        if (typeof parsed.title === "string" || typeof parsed.title === "number") {
+          kept2.push(`title: ${JSON.stringify(String(parsed.title))}`);
+        }
+        if (typeof parsed.displayMode === "string" || typeof parsed.displayMode === "number") {
+          kept2.push(`displayMode: ${JSON.stringify(String(parsed.displayMode))}`);
+        }
+        return kept2.length ? `---${eol}${kept2.join(eol)}${eol}---` : "";
+      } catch {
+      }
+    }
+    const lines = content.replace(/\r?\n$/, "").split(/\r?\n/);
+    const rootIndent = Math.min(...lines.filter((line) => line.trim() && !line.trimStart().startsWith("#")).map((line) => line.match(/^\s*/)[0].length));
+    if (!Number.isFinite(rootIndent)) return "";
+    const kept = [];
+    let keepBlock = false;
+    for (const line of lines) {
+      const trimmed2 = line.trim();
+      if (!trimmed2) {
+        if (keepBlock) kept.push(line);
+        continue;
+      }
+      if (trimmed2.startsWith("#")) {
+        if (keepBlock) kept.push(line);
+        continue;
+      }
+      const indent = line.match(/^\s*/)[0].length;
+      if (indent <= rootIndent) {
+        keepBlock = allowedFrontmatterKey(frontmatterKey(line, indent));
+      }
+      if (keepBlock) kept.push(line);
+    }
+    while (kept.length && !kept.at(-1).trim()) kept.pop();
+    return kept.length ? `---${eol}${kept.join(eol)}${eol}---` : "";
+  }
+  function splitFrontmatter(source) {
+    const bom = source.startsWith("\uFEFF") ? "\uFEFF" : "";
+    const text = bom ? source.slice(1) : source;
+    const match = text.match(FRONTMATTER_RE);
+    if (!match || match.index !== 0) return { bom, frontmatter: "", body: text };
+    const frontmatter = sanitizeFrontmatterContent(match[1] || "");
+    return { bom, frontmatter, body: text.slice(match[0].length) };
+  }
+  function splitMermaidStatements(line) {
+    const statements = [];
+    let start = 0;
+    let quote = "";
+    let escaped = false;
+    let parentheses = 0;
+    let brackets = 0;
+    let braces = 0;
+    for (let index = 0; index < line.length; index++) {
+      const char = line[index];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (quote && char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (quote) {
+        if (char === quote) quote = "";
+        continue;
+      }
+      if (char === '"' || char === "'" || char === "`") {
+        quote = char;
+        continue;
+      }
+      if (char === "(") parentheses++;
+      else if (char === ")") parentheses = Math.max(0, parentheses - 1);
+      else if (char === "[") brackets++;
+      else if (char === "]") brackets = Math.max(0, brackets - 1);
+      else if (char === "{") braces++;
+      else if (char === "}") braces = Math.max(0, braces - 1);
+      else if (char === "%" && line[index + 1] === "%" && !parentheses && !brackets && !braces) break;
+      else if (char === ";" && !parentheses && !brackets && !braces) {
+        statements.push(line.slice(start, index));
+        start = index + 1;
+      }
+    }
+    statements.push(line.slice(start));
+    return statements;
+  }
+  function stripClickStatements(source) {
+    return source.split(/(\r\n|\n|\r)/).map((part) => {
+      if (!part || part === "\n" || part === "\r\n" || part === "\r" || part.trimStart().startsWith("%%")) return part;
+      const statements = splitMermaidStatements(part);
+      if (!statements.some((statement) => /^\s*click\b/i.test(statement))) return part;
+      return statements.filter((statement) => !/^\s*click\b/i.test(statement)).join(";");
+    }).join("");
+  }
+  function removeAttribute(node, attribute) {
+    if (attribute.namespaceURI && typeof node.removeAttributeNS === "function") {
+      node.removeAttributeNS(attribute.namespaceURI, attribute.localName);
+    } else {
+      node.removeAttribute(attribute.name);
+    }
+  }
+  function splitSelectorList(selectors) {
+    const result = [];
+    let start = 0;
+    let quote = "";
+    let escaped = false;
+    let parentheses = 0;
+    let brackets = 0;
+    for (let index = 0; index < selectors.length; index++) {
+      const char = selectors[index];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (quote && char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (quote) {
+        if (char === quote) quote = "";
+        continue;
+      }
+      if (char === '"' || char === "'") {
+        quote = char;
+        continue;
+      }
+      if (char === "(") parentheses++;
+      else if (char === ")") parentheses = Math.max(0, parentheses - 1);
+      else if (char === "[") brackets++;
+      else if (char === "]") brackets = Math.max(0, brackets - 1);
+      else if (char === "," && !parentheses && !brackets) {
+        result.push(selectors.slice(start, index));
+        start = index + 1;
+      }
+    }
+    result.push(selectors.slice(start));
+    return result;
+  }
+  function matchingBrace(css, open) {
+    let depth = 0;
+    let quote = "";
+    let escaped = false;
+    for (let index = open; index < css.length; index++) {
+      const char = css[index];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (quote && char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (quote) {
+        if (char === quote) quote = "";
+        continue;
+      }
+      if (char === '"' || char === "'") {
+        quote = char;
+        continue;
+      }
+      if (char === "{") depth++;
+      else if (char === "}" && --depth === 0) return index;
+    }
+    return -1;
+  }
+  function nextRuleBoundary(css, start) {
+    let quote = "";
+    let escaped = false;
+    let parentheses = 0;
+    let brackets = 0;
+    for (let index = start; index < css.length; index++) {
+      const char = css[index];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (quote && char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (quote) {
+        if (char === quote) quote = "";
+        continue;
+      }
+      if (char === '"' || char === "'") {
+        quote = char;
+        continue;
+      }
+      if (char === "(") parentheses++;
+      else if (char === ")") parentheses = Math.max(0, parentheses - 1);
+      else if (char === "[") brackets++;
+      else if (char === "]") brackets = Math.max(0, brackets - 1);
+      else if (!parentheses && !brackets && (char === "{" || char === ";")) return { index, char };
+    }
+    return null;
+  }
+  function hasDeclarationsBlock(body) {
+    let quote = "";
+    let escaped = false;
+    for (const char of body) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (quote && char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (quote) {
+        if (char === quote) quote = "";
+        continue;
+      }
+      if (char === '"' || char === "'") quote = char;
+      else if (char === "{") return true;
+    }
+    return false;
+  }
+  function scopedSelector(selector, scopeId) {
+    const value = selector.trim();
+    if (!value) return "";
+    const prefix = `#${scopeId}`;
+    if (value.startsWith(prefix) && !/^[\w-]/.test(value.slice(prefix.length))) return value;
+    return `${prefix} ${value}`;
+  }
+  function scopeStyleCSS(css, scopeId) {
+    let output = "";
+    let index = 0;
+    while (index < css.length) {
+      while (index < css.length && /[\s;]/.test(css[index])) index++;
+      if (index >= css.length || css[index] === "}") break;
+      if (css[index] === "@") {
+        const boundary2 = nextRuleBoundary(css, index);
+        if (!boundary2) break;
+        if (boundary2.char === ";") {
+          index = boundary2.index + 1;
+          continue;
+        }
+        const close2 = matchingBrace(css, boundary2.index);
+        if (close2 < 0) break;
+        const prelude = css.slice(index, boundary2.index).trim();
+        const name = prelude.match(/^@([\w-]+)/)?.[1]?.toLowerCase() || "";
+        if (STYLE_GROUP_RULES.has(name)) {
+          const inner = scopeStyleCSS(css.slice(boundary2.index + 1, close2), scopeId);
+          if (inner) output += `${prelude}{${inner}}`;
+        }
+        index = close2 + 1;
+        continue;
+      }
+      const boundary = nextRuleBoundary(css, index);
+      if (!boundary || boundary.char !== "{") break;
+      const close = matchingBrace(css, boundary.index);
+      if (close < 0) break;
+      const body = css.slice(boundary.index + 1, close);
+      if (!hasDeclarationsBlock(body)) {
+        const selectors = splitSelectorList(css.slice(index, boundary.index)).map((selector) => scopedSelector(selector, scopeId)).filter(Boolean);
+        if (selectors.length) output += `${selectors.join(",")}{${body}}`;
+      }
+      index = close + 1;
+    }
+    return output;
+  }
+  function safeStyleScopeId(value) {
+    const id = String(value || "");
+    return /^[A-Za-z_][A-Za-z0-9_-]*$/.test(id) ? id : "";
+  }
   function sanitizeMermaidSource(source) {
+    const { bom, frontmatter, body } = splitFrontmatter(String(source || ""));
     let blocked = false;
-    const stripped = String(source || "").replace(DIRECTIVE_RE, (directive) => {
+    const stripped = body.replace(DIRECTIVE_RE, (directive) => {
       if (SECURITY_RE.test(directive)) {
         blocked = true;
         return "";
@@ -278,7 +581,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       return safeInitDirective(directive);
     });
     if (blocked) return null;
-    const cleaned = stripped.replace(CLICK_RE, "").trim();
+    const cleaned = `${bom}${frontmatter}${stripClickStatements(stripped)}`.trim();
     return cleaned || null;
   }
   function sanitizeSvgMarkup(markup) {
@@ -290,6 +593,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     if (doc.querySelector("parsererror") || root?.localName !== "svg") {
       throw new Error("gpt-mermaid: renderer returned invalid SVG");
     }
+    const styleScopeId = safeStyleScopeId(root.getAttribute("id"));
     for (const node of [root, ...root.querySelectorAll("*")]) {
       if (node.namespaceURI !== SVG_NS || DENY_TAGS.has(node.localName) || !SVG_TAGS.has(node.localName)) {
         node.remove();
@@ -297,26 +601,38 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       }
       for (const attribute of [...node.attributes]) {
         const name = attribute.name;
+        const localName = attribute.localName || name.split(":").pop();
         const value = attribute.value;
-        if (/^on/i.test(name) || name === "srcset" || name === "xml:base") {
-          node.removeAttribute(name);
+        if (/^on/i.test(localName) || localName === "srcset" || localName === "ping" || localName === "base" && attribute.namespaceURI === XML_NS) {
+          removeAttribute(node, attribute);
           continue;
         }
-        if (["href", "xlink:href", "src"].includes(name) && !safeURL(value)) {
-          node.removeAttribute(name);
+        if (localName === "href" || name.endsWith(":href")) {
+          if (attribute.namespaceURI && attribute.namespaceURI !== XLINK_NS || !safeURL(value)) {
+            removeAttribute(node, attribute);
+          }
           continue;
         }
-        if (name === "style") {
+        if (localName === "src" && (attribute.namespaceURI || !safeURL(value))) {
+          removeAttribute(node, attribute);
+          continue;
+        }
+        if (localName === "style") {
+          if (attribute.namespaceURI) {
+            removeAttribute(node, attribute);
+            continue;
+          }
           const safe = safeCSS(value);
           if (safe) node.setAttribute("style", safe);
-          else node.removeAttribute("style");
+          else removeAttribute(node, attribute);
           continue;
         }
-        if (/url\s*\(/i.test(value) && !safeCSS(value)) node.removeAttribute(name);
+        if (/url\s*\(/i.test(value) && !safeCSS(value)) removeAttribute(node, attribute);
       }
       if (node.localName === "style") {
         const safe = safeCSS(node.textContent);
-        if (safe) node.textContent = safe;
+        const scoped = safe && styleScopeId ? scopeStyleCSS(safe, styleScopeId) : "";
+        if (scoped) node.textContent = scoped;
         else node.remove();
       }
     }
@@ -639,6 +955,23 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     if (!clearRoute(next, boxes)) return;
     edge.points = start ? next : next.reverse();
   }
+  function loopRoute(box, side, size, reach = 0, lane = 0, laneCount = 1) {
+    const horizontal = horizontalSide(side), center = horizontal ? box.y + box.height / 2 : box.x + box.width / 2;
+    const span = Math.min(32, (horizontal ? box.height : box.width) * 0.7);
+    const count = Math.max(1, Math.floor(laneCount) || 1);
+    const slotSpan = span / count;
+    const laneCenter = center + (Math.max(0, lane) - (count - 1) / 2) * slotSpan;
+    const laneSpan = count === 1 ? span : Math.max(2, Math.min(span, slotSpan * 0.65));
+    const offset = Math.max(reach, 42, (horizontal ? size.width : size.height) + 24);
+    const a = onSide(box, side, laneCenter - laneSpan / 2), b = onSide(box, side, laneCenter + laneSpan / 2);
+    const axis = horizontal ? "x" : "y";
+    return [
+      a,
+      { ...a, [axis]: a[axis] + signOf(side) * offset },
+      { ...b, [axis]: b[axis] + signOf(side) * offset },
+      b
+    ];
+  }
   function routeFlowEdges(svg, graph) {
     const geometry2 = flowGeometry(svg, graph);
     if (!geometry2) return;
@@ -660,7 +993,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       const units = [], bundles = /* @__PURE__ */ new Map();
       for (const port of ports) {
         const { edge, start } = port;
-        const compatible = !start && edge.source !== edge.target && edge.model.arrowTypeStart === "none" && edge.model.arrowTypeEnd === "arrow_point" && edge.model.pattern === "normal" && !edge.model.animate;
+        const compatible = !start && edge.source !== edge.target && edge.model.arrowTypeStart === "none" && edge.model.arrowTypeEnd === "arrow_point" && edge.model.pattern === "normal" && !edge.model.animate && !ports.some((other) => other.start);
         const key = compatible ? JSON.stringify([edge.model.thickness, edge.model.style, edge.model.cssCompiledStyles]) : null;
         if (key !== null && bundles.has(key)) bundles.get(key).push(port);
         else {
@@ -697,17 +1030,23 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         if (port.edge.points.length < count) simplified++;
       }
     }
+    const loopCounts = /* @__PURE__ */ new Map();
+    for (const edge of edges) {
+      if (edge.source !== edge.target) continue;
+      const side = sideOf(edge.points[0], edge.points[1]);
+      const laneKey = `${edge.source.element.id}\0${side}`;
+      loopCounts.set(laneKey, (loopCounts.get(laneKey) || 0) + 1);
+    }
+    const loopLanes = /* @__PURE__ */ new Map();
     for (const edge of edges) {
       if (edge.source === edge.target) {
         const box = edge.source.box, side = sideOf(edge.points[0], edge.points[1]);
-        const horizontal = horizontalSide(side), center = horizontal ? box.y + box.height / 2 : box.x + box.width / 2;
-        const span = Math.min(32, (horizontal ? box.height : box.width) * 0.7);
         const label = [...svg.querySelectorAll("g.edgeLabel .label[data-id]")].find((l) => l.dataset.id === edge.model.id);
         const size = label ? boundsInSvg(svg, label) : { width: 0, height: 0 };
-        const reach = Math.max(42, (horizontal ? size.width : size.height) + 24);
-        const a = onSide(box, side, center - span / 2), b = onSide(box, side, center + span / 2);
-        const axis = horizontal ? "x" : "y";
-        edge.points = [a, { ...a, [axis]: a[axis] + signOf(side) * reach }, { ...b, [axis]: b[axis] + signOf(side) * reach }, b];
+        const laneKey = `${edge.source.element.id}\0${side}`;
+        const lane = loopLanes.get(laneKey) || 0;
+        loopLanes.set(laneKey, lane + 1);
+        edge.points = loopRoute(box, side, size, 0, lane, loopCounts.get(laneKey) || 1);
         edge.element.setAttribute("data-gptm-self-loop", "true");
         loops++;
       }
@@ -802,6 +1141,49 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       });
       return { element, source, target, points: raw.map((p) => inSvg(svg, element, p)), compatible };
     }).filter(Boolean);
+    const loopLabels = new Map([...svg.querySelectorAll("g.edgeLabel")].map((label) => [
+      label.querySelector("[data-id]")?.dataset.id || label.dataset.id,
+      label
+    ]));
+    const loopCounts = /* @__PURE__ */ new Map();
+    for (const edge of edges) {
+      if (edge.source !== edge.target || !edge.compatible) continue;
+      const laneKey = edge.source.element.id;
+      loopCounts.set(laneKey, (loopCounts.get(laneKey) || 0) + 1);
+    }
+    const loopLanes = /* @__PURE__ */ new Map();
+    for (const edge of edges) {
+      if (edge.source !== edge.target || !edge.compatible) continue;
+      const label = loopLabels.get(edge.element.dataset.id), size = label ? boundsInSvg(svg, label) : { width: 0, height: 0 };
+      const initial = sideOf(edge.points[0], edge.points[1]);
+      const obstacles = [...nodes.values()].filter((node) => node !== edge.source).map((node) => node.box);
+      for (const side of [initial, ...["right", "left", "bottom", "top"].filter((s) => s !== initial)]) {
+        const laneKey = edge.source.element.id;
+        const lane = loopLanes.get(laneKey) || 0;
+        const points = loopRoute(
+          edge.source.box,
+          side,
+          size,
+          0,
+          lane,
+          loopCounts.get(laneKey) || 1
+        );
+        if (!clearRoute(points, obstacles, 4)) continue;
+        const center = { x: (points[1].x + points[2].x) / 2, y: (points[1].y + points[2].y) / 2 };
+        const reservation = nativeLabelBox(center, size);
+        if (label && [...nodes.values()].some((node) => boxesOverlap(reservation, node.box))) continue;
+        edge.points = points;
+        writePoints(svg, edge.element, points);
+        if (label) {
+          edge.element.setAttribute("data-gptm-label-x", String(center.x));
+          edge.element.setAttribute("data-gptm-label-y", String(center.y));
+        }
+        edge.element.setAttribute("data-gptm-native-rerouted", "true");
+        edge.element.setAttribute("data-gptm-self-loop", "true");
+        loopLanes.set(laneKey, lane + 1);
+        break;
+      }
+    }
     const groups = /* @__PURE__ */ new Map(), ports = /* @__PURE__ */ new Map();
     for (const edge of edges) for (const start of [true, false]) {
       const node = start ? edge.source : edge.target, anchor = start ? edge.points[0] : edge.points.at(-1), box = node.box;
@@ -840,7 +1222,10 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       label.querySelector("[data-id]")?.dataset.id,
       label
     ]));
-    const reservedLabels = [];
+    const reservedLabels = edges.filter((edge) => edge.source === edge.target && edge.element.hasAttribute("data-gptm-label-x")).map((edge) => nativeLabelBox({
+      x: Number(edge.element.getAttribute("data-gptm-label-x")),
+      y: Number(edge.element.getAttribute("data-gptm-label-y"))
+    }, boundsInSvg(svg, loopLabels.get(edge.element.dataset.id))));
     const shields = [...ports.values()].filter((port) => port.edge.compatible).map((port) => {
       const arrow = port.edge.element.hasAttribute(port.start ? "marker-start" : "marker-end");
       const half = arrow ? Math.min(9, port.spacing * 0.38) : 2.5, p = port.anchor, horizontal = horizontalSide(port.side);
@@ -939,6 +1324,10 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
   }
 
   // src/svg-labels.js
+  var TRIANGLE_MARKER_FAMILY_RE = /(?:point(?:Start|End)(?:-margin)?|barbEnd|(?:^|-)arrowhead|filled-head|stick-arrowhead|solidTopArrowHead|solidBottomArrowHead|requirement_arrowEnd|classDiagram-(?:dependency|extension)(?:Start|End)(?:-margin)?)/;
+  function isTriangleMarkerReference(value) {
+    return TRIANGLE_MARKER_FAMILY_RE.test(String(value || ""));
+  }
   function shift(element, x, y) {
     if (Math.abs(x) + Math.abs(y) < 1e-3) return;
     element.setAttribute("transform", `translate(${x}, ${y}) ${element.getAttribute("transform") || ""}`.trim());
@@ -962,12 +1351,149 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       shift(label, target.x - center.x, 0);
     }
   }
+  function journeyTextMeasurer(text) {
+    const style = getComputedStyle(text);
+    const fallback = (value) => Math.max(1, Array.from(String(value)).length * (parseFloat(style.fontSize) || 14) * 0.58);
+    if (typeof document === "undefined") return fallback;
+    try {
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+      if (!context) return fallback;
+      context.font = [style.fontStyle, style.fontWeight, style.fontSize, style.fontFamily].filter(Boolean).join(" ");
+      return (value) => {
+        try {
+          const width = context.measureText(String(value)).width;
+          return Number.isFinite(width) ? width : fallback(value);
+        } catch {
+          return fallback(value);
+        }
+      };
+    } catch {
+      return fallback;
+    }
+  }
+  function wrapJourneyText(input, maxWidth, measure, maxLines = 4) {
+    const text = String(input ?? "").trim().replace(/\s+/g, " ");
+    if (!text) return [];
+    const width = Number(maxWidth);
+    if (!(width > 0) || typeof measure !== "function") return [text];
+    const fits = (value) => {
+      try {
+        return measure(value) <= width;
+      } catch {
+        return false;
+      }
+    };
+    const splitWord = (word) => {
+      const chunks = [];
+      let chunk = "";
+      for (const character of Array.from(word)) {
+        const next = chunk + character;
+        if (chunk && !fits(next)) {
+          chunks.push(chunk);
+          chunk = character;
+        } else {
+          chunk = next;
+        }
+      }
+      if (chunk) chunks.push(chunk);
+      return chunks;
+    };
+    const lines = [];
+    let current = "";
+    let currentBreak = "";
+    const flush = () => {
+      if (current) lines.push({ text: current, breakBefore: currentBreak });
+      current = "";
+      currentBreak = "";
+    };
+    for (const word of text.split(" ")) {
+      if (!word) continue;
+      if (fits(word)) {
+        if (!current) {
+          current = word;
+          currentBreak = lines.length ? " " : "";
+          continue;
+        }
+        const candidate = `${current} ${word}`;
+        if (fits(candidate)) {
+          current = candidate;
+          continue;
+        }
+        flush();
+        current = word;
+        currentBreak = " ";
+        continue;
+      }
+      flush();
+      const chunks = splitWord(word);
+      const wordBreak = lines.length ? " " : "";
+      for (let index = 0; index < chunks.length; index++) {
+        if (index === chunks.length - 1) {
+          current = chunks[index];
+          currentBreak = index === 0 ? wordBreak : "";
+        } else {
+          lines.push({ text: chunks[index], breakBefore: index === 0 ? wordBreak : "" });
+        }
+      }
+    }
+    flush();
+    const limit = Number(maxLines);
+    if (Number.isFinite(limit) && limit > 0 && lines.length > limit) {
+      const tailLines = lines.slice(limit - 1);
+      const tail = tailLines.map((line, index) => `${index ? line.breakBefore : ""}${line.text}`).join("");
+      lines.length = limit - 1;
+      lines.push({ text: tail, breakBefore: tailLines[0].breakBefore });
+    }
+    return lines.map((line) => line.text);
+  }
+  function fitJourneyTask(text, variables) {
+    if (!text.classList.contains("task")) return;
+    const group = text.closest("switch")?.parentElement;
+    const rect = group?.querySelector(":scope > rect");
+    if (!rect) return;
+    const rectBox = rect.getBBox();
+    const textBox = text.getBBox();
+    if (!(rectBox.width > 0 && rectBox.height > 0)) return;
+    if (textBox.x >= rectBox.x - 1 && textBox.x + textBox.width <= rectBox.x + rectBox.width + 1 && textBox.y >= rectBox.y - 1 && textBox.y + textBox.height <= rectBox.y + rectBox.height + 1) return;
+    const style = getComputedStyle(text);
+    const originalFontSize = parseFloat(style.fontSize) || 14;
+    const maxWidth = Math.max(1, rectBox.width - 10);
+    const maxHeight = Math.max(1, rectBox.height - 8);
+    const measure = journeyTextMeasurer(text);
+    const lines = wrapJourneyText(text.textContent, maxWidth, measure, 4);
+    if (!lines.length) return;
+    const lineHeight = Math.max(1, Math.min(originalFontSize * 1.25, maxHeight / lines.length));
+    const fontSize = Math.max(5, Math.min(originalFontSize, lineHeight / 1.25));
+    text.style.setProperty("font-size", `${fontSize}px`, "important");
+    const measureFitted = journeyTextMeasurer(text);
+    const centerX = rectBox.x + rectBox.width / 2;
+    const centerY = rectBox.y + rectBox.height / 2;
+    const firstY = centerY - (lines.length - 1) * lineHeight / 2;
+    text.setAttribute("x", String(centerX));
+    text.setAttribute("y", String(centerY));
+    text.setAttribute("text-anchor", "middle");
+    text.setAttribute("dominant-baseline", "central");
+    while (text.firstChild) text.removeChild(text.firstChild);
+    for (let index = 0; index < lines.length; index++) {
+      const span = document.createElementNS(text.namespaceURI, "tspan");
+      span.setAttribute("x", String(centerX));
+      span.setAttribute("y", String(firstY + index * lineHeight));
+      span.textContent = lines[index];
+      const measured = Math.min(maxWidth, Math.max(1, measureFitted(lines[index])));
+      span.setAttribute("textLength", String(measured));
+      span.setAttribute("lengthAdjust", "spacingAndGlyphs");
+      span.style.setProperty("fill", variables.textColor, "important");
+      text.append(span);
+    }
+  }
   function journeyLabels(svg, variables) {
     for (const text of svg.querySelectorAll("text.journey-section, text.task")) {
       text.style.setProperty("fill", variables.textColor, "important");
       text.style.setProperty("font-family", variables.fontFamily);
       text.style.setProperty("font-weight", "600");
       for (const span of text.querySelectorAll("tspan")) span.style.setProperty("fill", variables.textColor, "important");
+      fitJourneyTask(text, variables);
     }
   }
   function c4Labels(svg) {
@@ -983,6 +1509,35 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
   function overlaps(a, b, gap = 5) {
     return a.x < b.right + gap && a.right > b.x - gap && a.y < b.bottom + gap && a.bottom > b.y - gap;
   }
+  function arrowRegions(svg, edges) {
+    const regions = [];
+    const view = svg.viewBox.baseVal, canvas = Math.max(view.width, view.height);
+    for (const edge of edges) for (const start of [true, false]) {
+      const ref = edge.getAttribute(start ? "marker-start" : "marker-end");
+      if (!ref || !isTriangleMarkerReference(ref)) continue;
+      const length = edge.getTotalLength();
+      if (!length) continue;
+      const p = inSvg(svg, edge, edge.getPointAtLength(start ? 0 : length));
+      const q = inSvg(svg, edge, edge.getPointAtLength(start ? Math.min(0.02, length) : Math.max(0, length - 0.02)));
+      const d = Math.hypot(p.x - q.x, p.y - q.y);
+      if (!d) continue;
+      const port = Number(edge.getAttribute("data-gptm-port-span")) || Infinity;
+      const depth = Math.min(18, port * 1.25 * 0.7, Math.max(11, canvas / 100)) + 2;
+      const vx = (q.x - p.x) / d, vy = (q.y - p.y) / d, half = depth / 2.5;
+      const points = [
+        p,
+        { x: p.x + vx * depth + vy * half, y: p.y + vy * depth - vx * half },
+        { x: p.x + vx * depth - vy * half, y: p.y + vy * depth + vx * half }
+      ];
+      regions.push({
+        x: Math.min(...points.map((p2) => p2.x)),
+        y: Math.min(...points.map((p2) => p2.y)),
+        right: Math.max(...points.map((p2) => p2.x)),
+        bottom: Math.max(...points.map((p2) => p2.y))
+      });
+    }
+    return regions;
+  }
   function placeEdgeLabels(svg) {
     const paths = new Map([...svg.querySelectorAll("[data-id]")].filter((p) => p instanceof SVGGeometryElement).map((p) => [p.dataset.id, p]));
     const nodes = [...svg.querySelectorAll("g.node > .label-container, g.node > .outer-path")].map((n) => boundsInSvg(svg, n));
@@ -991,6 +1546,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       const points = Array.from({ length: steps + 1 }, (_, i) => inSvg(svg, edge, edge.getPointAtLength(length * i / steps)));
       return { edge, points };
     });
+    const arrows = arrowRegions(svg, [...paths.values()]);
     const occupied = [];
     const labels = [...svg.querySelectorAll("g.edgeLabel")];
     const available = (label) => {
@@ -1010,11 +1566,16 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       if (box.width === 0 || box.height === 0) continue;
       if (edge.hasAttribute("data-gptm-label-x") && edge.hasAttribute("data-gptm-label-y")) {
         const target2 = { x: Number(edge.getAttribute("data-gptm-label-x")), y: Number(edge.getAttribute("data-gptm-label-y")) };
-        const before2 = fromSvg(svg, label.parentElement, old), after2 = fromSvg(svg, label.parentElement, target2);
-        shift(label, after2.x - before2.x, after2.y - before2.y);
-        label.setAttribute("data-gptm-label-edge", edge.id);
-        occupied.push({ x: target2.x - box.width / 2, y: target2.y - box.height / 2, right: target2.x + box.width / 2, bottom: target2.y + box.height / 2 });
-        continue;
+        const proposed = { x: target2.x - box.width / 2, y: target2.y - box.height / 2, right: target2.x + box.width / 2, bottom: target2.y + box.height / 2 };
+        if (![...arrows, ...nodes, ...occupied].some((region) => overlaps(proposed, region, 2))) {
+          const before2 = fromSvg(svg, label.parentElement, old), after2 = fromSvg(svg, label.parentElement, target2);
+          shift(label, after2.x - before2.x, after2.y - before2.y);
+          label.setAttribute("data-gptm-label-edge", edge.id);
+          occupied.push(proposed);
+          continue;
+        }
+        edge.removeAttribute("data-gptm-label-x");
+        edge.removeAttribute("data-gptm-label-y");
       }
       const length = edge.getTotalLength(), candidates = [];
       if (!Number.isFinite(length) || length < 1) continue;
@@ -1030,9 +1591,10 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         const b = inSvg(svg, edge, edge.getPointAtLength(Math.min(length, offset + 4)));
         const diagonal = Math.min(Math.abs(b.x - a.x), Math.abs(b.y - a.y));
         const collision = [...nodes, ...occupied].filter((n) => overlaps(proposed, n)).length;
+        const arrowCollision = arrows.filter((n) => overlaps(proposed, n, 2)).length;
         const foreign = lines.filter((line) => line.edge !== edge && line.points.some((p) => p.x > proposed.x - 2 && p.x < proposed.right + 2 && p.y > proposed.y - 2 && p.y < proposed.bottom + 2)).length;
         const nearEnd = Math.min(offset, length - offset) < Math.max(box.width, box.height) / 2 + 16;
-        candidates.push({ point, proposed, score: collision * 1e6 + foreign * 1e5 + (nearEnd ? 1e4 : 0) + diagonal * 20 + Math.hypot(point.x - old.x, point.y - old.y) });
+        candidates.push({ point, proposed, score: collision * 1e6 + arrowCollision * 1e6 + foreign * 1e5 + (nearEnd ? 1e4 : 0) + diagonal * 20 + Math.hypot(point.x - old.x, point.y - old.y) });
       };
       const steps = Math.min(1e3, Math.max(20, Math.ceil(length / 5)));
       for (let i = 1; i < steps; i++) add(length * i / steps);
@@ -1112,6 +1674,8 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
   var SHAFT_MAX_SEGMENTS = 16384;
   var SHAFT_LENGTH_RE = /^([-+]?(?:\d*\.?\d+|\d+\.?\d*)(?:e[-+]?\d+)?)(px|%)?$/i;
   var SHAFT_TRIANGLE_RE = /^\s*M\s*0[\s,]+0\s*L\s*10[\s,]+4\s*L\s*0[\s,]+8\s*Z\s*$/i;
+  var SHAFT_TERMINAL_CONTACT = 3;
+  var SHAFT_BASE_OVERLAP = 0.4;
   function triangleDepth(svg, edge, endpoint) {
     const id = (edge.getAttribute(`marker-${endpoint}`) || "").match(/^url\(#([^)]+)\)$/)?.[1];
     if (!id) return 0;
@@ -1185,6 +1749,53 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     }
     return segments2;
   }
+  function arrowCoveredLength(edge, length, depth, start) {
+    if (!depth || typeof edge.getPointAtLength !== "function") return depth;
+    const point = (distance2) => {
+      const p = edge.getPointAtLength(start ? distance2 : length - distance2);
+      if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) throw new Error("invalid SVG point");
+      return p;
+    };
+    const tip = point(0), adjacent = point(Math.min(0.02, length));
+    const magnitude = Math.hypot(adjacent.x - tip.x, adjacent.y - tip.y);
+    if (!magnitude) return depth;
+    const v = { x: (adjacent.x - tip.x) / magnitude, y: (adjacent.y - tip.y) / magnitude };
+    const inside = (distance2) => {
+      const p = point(distance2), dx = p.x - tip.x, dy = p.y - tip.y;
+      const along = dx * v.x + dy * v.y, across = dx * v.y - dy * v.x;
+      return along >= -1e-5 && along <= depth && Math.abs(across) <= along * 0.4 + 1e-4;
+    };
+    const limit = length, steps = Math.min(16384, Math.max(16, Math.ceil(limit / 0.25)));
+    let lo = 0;
+    for (let i = 1; i <= steps; i++) {
+      let hi = limit * i / steps;
+      if (inside(hi)) {
+        lo = hi;
+        continue;
+      }
+      for (let j = 0; j < 22; j++) {
+        const mid = (lo + hi) / 2;
+        if (inside(mid)) lo = mid;
+        else hi = mid;
+      }
+      return (lo + hi) / 2;
+    }
+    return length;
+  }
+  function connectTerminalSegments(segments2, length, head, tail, contact) {
+    const end = length - tail;
+    if (head >= end) return segments2;
+    const all = segments2.slice();
+    if (head > 0) all.push([head, Math.min(end, head + contact)]);
+    if (tail > 0) all.push([Math.max(head, end - contact), end]);
+    all.sort((a, b) => a[0] - b[0]);
+    const merged = [];
+    for (const segment of all) {
+      if (merged.length && segment[0] <= merged.at(-1)[1]) merged.at(-1)[1] = Math.max(merged.at(-1)[1], segment[1]);
+      else merged.push(segment.slice());
+    }
+    return merged;
+  }
   function encodeSegments(segments2, length, scale) {
     const dash = [0];
     let cursor = 0;
@@ -1200,11 +1811,11 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     const edges = [...svg.querySelectorAll("[data-gptm-direction]")];
     const byId = new Map(edges.map((edge) => [edge.getAttribute("data-id"), edge]));
     for (const edge of edges) {
-      const head = triangleDepth(svg, edge, "start");
+      const headDepth = triangleDepth(svg, edge, "start");
       const sharedId = edge.getAttribute("data-gptm-shared-tip");
       const shared = sharedId ? byId.get(sharedId) : null;
-      const tail = triangleDepth(svg, shared || edge, "end");
-      if (!(head > 0 || tail > 0)) continue;
+      const tailDepth = triangleDepth(svg, shared || edge, "end");
+      if (!(headDepth > 0 || tailDepth > 0)) continue;
       const skip = (reason) => report.skipped.push({ id: edge.id || "", reason });
       if (edge.localName === "path" && ((edge.getAttribute("d") || "").match(/[Mm]/g)?.length || 0) > 1) {
         skip("multiple-subpaths");
@@ -1241,11 +1852,23 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         skip("unsupported-dash-length");
         continue;
       }
-      const segments2 = clippedSegments(length, head, tail, dash.pattern, dash.offset);
+      let head, tail;
+      try {
+        head = arrowCoveredLength(edge, length, headDepth, true);
+        tail = arrowCoveredLength(edge, length, tailDepth, false);
+        if (head > 0 && head < length) head = Math.max(0, head - Math.min(SHAFT_BASE_OVERLAP, head * 0.08));
+        if (tail > 0 && tail < length) tail = Math.max(0, tail - Math.min(SHAFT_BASE_OVERLAP, tail * 0.08));
+      } catch {
+        skip("geometry-unavailable");
+        continue;
+      }
+      let segments2 = clippedSegments(length, head, tail, dash.pattern, dash.offset);
       if (segments2 === null) {
         skip("dash-segment-budget");
         continue;
       }
+      const contact = Math.max(SHAFT_TERMINAL_CONTACT, (parseFloat(style.strokeWidth) || 1.6) * 1.5);
+      segments2 = connectTerminalSegments(segments2, length, head, tail, contact);
       edge.style.setProperty("stroke-dasharray", encodeSegments(segments2, length, scale), "important");
       edge.style.setProperty("stroke-dashoffset", "0", "important");
       edge.style.setProperty("stroke-linecap", "butt", "important");
@@ -1264,18 +1887,66 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       return [model.alias, element && shape ? { element, box: boundsInSvg(svg, shape) } : null];
     }).filter(([, node]) => node));
     const elements = [...svg.querySelectorAll("path[marker-end],line[marker-end]")].filter((p) => !p.closest("defs,marker"));
-    if (elements.length !== graph.c4Relations.length) return;
     const boundaryTitles = [...svg.querySelectorAll("g > text")].filter(
       (text) => !text.closest(".node") && text.parentElement.querySelector(":scope > rect") && text.textContent.trim()
     ).map((text) => boundsInSvg(svg, text));
+    for (const group of new Set([...svg.querySelectorAll("g > text")].filter(
+      (text) => !text.closest(".node") && text.parentElement.querySelector(":scope > rect") && text.textContent.trim()
+    ).map((text) => text.parentElement))) {
+      group.setAttribute("data-gptm-c4-boundary", "true");
+      const classes = (group.getAttribute("class") || "").split(/\s+/).filter(Boolean);
+      if (!classes.includes("c4-boundary")) group.setAttribute("class", [...classes, "c4-boundary"].join(" "));
+    }
+    const records = graph.c4Relations.map((model, index) => ({
+      model,
+      index,
+      source: nodes.get(model.from),
+      target: nodes.get(model.to)
+    }));
+    const boundaryDistance2 = (p, b) => Math.min(
+      Math.abs(p.x - b.x),
+      Math.abs(p.x - b.right),
+      Math.abs(p.y - b.y),
+      Math.abs(p.y - b.bottom)
+    );
+    const used = /* @__PURE__ */ new Set(), matched = [], skipped = [];
+    const candidates = [];
+    for (const record of records) {
+      if (!record.source || !record.target) continue;
+      const cap = Math.hypot(record.source.box.width, record.source.box.height) + Math.hypot(record.target.box.width, record.target.box.height) + 24;
+      for (let index = 0; index < elements.length; index++) {
+        const original = elements[index];
+        let length;
+        try {
+          length = original.getTotalLength();
+        } catch {
+          continue;
+        }
+        if (!Number.isFinite(length)) continue;
+        const start = inSvg(svg, original, original.getPointAtLength(0));
+        const end = inSvg(svg, original, original.getPointAtLength(length));
+        const startGap = boundaryDistance2(start, record.source.box);
+        const endGap = boundaryDistance2(end, record.target.box);
+        const score = startGap + endGap;
+        if (!Number.isFinite(score) || score > cap) continue;
+        candidates.push({ record, index, original, score, length, start, end });
+      }
+    }
+    candidates.sort((a, b) => a.score - b.score || a.record.index - b.record.index || a.index - b.index);
+    const matchedRecords = /* @__PURE__ */ new Set();
+    for (const candidate of candidates) {
+      if (matchedRecords.has(candidate.record.index) || used.has(candidate.index)) continue;
+      used.add(candidate.index);
+      matchedRecords.add(candidate.record.index);
+      matched.push({ ...candidate.record, ...candidate });
+    }
+    for (const record of records) if (!matchedRecords.has(record.index)) skipped.push(record);
+    svg.setAttribute("data-gptm-c4-expected", String(records.length));
+    svg.setAttribute("data-gptm-expected-edges", String(records.length));
+    svg.setAttribute("data-gptm-skipped-edges", String(skipped.length));
+    svg.setAttribute("data-gptm-c4-skipped-relations", skipped.map((record) => record.index).join(","));
     let rerouted = 0;
-    elements.forEach((original, index) => {
-      const model = graph.c4Relations[index], source = nodes.get(model.from), target = nodes.get(model.to);
-      if (!source || !target) return;
-      const length = original.getTotalLength();
-      const start = inSvg(svg, original, original.getPointAtLength(0)), end = inSvg(svg, original, original.getPointAtLength(length));
-      const boundaryDistance2 = (p, b) => Math.min(Math.abs(p.x - b.x), Math.abs(p.x - b.right), Math.abs(p.y - b.y), Math.abs(p.y - b.bottom));
-      if (boundaryDistance2(start, source.box) > 3 || boundaryDistance2(end, target.box) > 3) return;
+    for (const { original, model, index, source, target, length, start, end } of matched) {
       const obstacles = [...nodes.values()].filter((n) => n !== source && n !== target).map((n) => n.box).concat(boundaryTitles);
       const samples = Array.from({ length: 41 }, (_, i) => inSvg(svg, original, original.getPointAtLength(length * i / 40)));
       let points = [start, end];
@@ -1289,7 +1960,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         const lead = { ...p, [axis]: p[axis] + direction * 12 };
         const tail = { ...q, [axis]: q[axis] - direction * 12 };
         const route = orthogonalRoute(lead, tail, [...nodes.values()].map((n) => n.box).concat(boundaryTitles), 20);
-        if (!route) return;
+        if (!route) continue;
         points = [p, ...route, q];
         rerouted++;
       } else if (original.localName === "path") {
@@ -1304,6 +1975,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       }))));
       edge.id = `${svg.id}-${id}`;
       edge.dataset.id = id;
+      edge.setAttribute("data-gptm-c4-relation", "true");
       edge.setAttribute("data-gptm-source", source.element.id);
       edge.setAttribute("data-gptm-target", target.element.id);
       edge.setAttribute("data-gptm-theme-stroke", "true");
@@ -1322,7 +1994,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       background.style.fill = variables.flowchartEdgeLabelColor;
       text.before(label);
       label.append(background, text);
-    });
+    }
     svg.setAttribute("data-gptm-c4-rerouted", String(rerouted));
   }
 
@@ -1633,7 +2305,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     }
     try {
       const nodeElements = [...svg.querySelectorAll("g.node")];
-      const edgeElements = [...svg.querySelectorAll("path[data-edge='true']")];
+      const edgeElements2 = [...svg.querySelectorAll("path[data-edge='true']")];
       const labels = [...svg.querySelectorAll("g.edgeLabel")];
       const nodeById = /* @__PURE__ */ new Map();
       const edgeById = /* @__PURE__ */ new Map();
@@ -1652,7 +2324,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         return { ...node, box: elementBox(svg, matches[0]) };
       });
       const edges = graph.edges.map((edge) => {
-        const matches = edgeElements.filter((element2) => element2.getAttribute("data-id") === edge.id);
+        const matches = edgeElements2.filter((element2) => element2.getAttribute("data-id") === edge.id);
         if (matches.length !== 1) throw new Error("missing-edge-metadata");
         const element = matches[0];
         const matrix = rootMatrix(svg, element);
@@ -1666,7 +2338,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
           labelBox: label ? elementBox(svg, label) : null
         };
       });
-      if (nodeElements.length !== nodes.length || edgeElements.length !== edges.length) {
+      if (nodeElements.length !== nodes.length || edgeElements2.length !== edges.length) {
         throw new Error("unmapped-graph-elements");
       }
       const plan = planAdaptiveFlowLayout({ ...graph, nodes, edges }, options);
@@ -1714,13 +2386,240 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     }
   }
 
+  // src/planar-layout.js
+  function solve(matrix, values) {
+    const rows = matrix.map((row, i) => [...row, values[i]]);
+    for (let k = 0; k < rows.length; k++) {
+      let pivot = k;
+      for (let i = k + 1; i < rows.length; i++) if (Math.abs(rows[i][k]) > Math.abs(rows[pivot][k])) pivot = i;
+      if (Math.abs(rows[pivot][k]) < 1e-9) return null;
+      [rows[k], rows[pivot]] = [rows[pivot], rows[k]];
+      const value = rows[k][k];
+      for (let j = k; j <= rows.length; j++) rows[k][j] /= value;
+      for (let i = 0; i < rows.length; i++) if (i !== k) {
+        const multiple = rows[i][k];
+        for (let j = k; j <= rows.length; j++) rows[i][j] -= rows[k][j] * multiple;
+      }
+    }
+    return rows.map((row) => row.at(-1));
+  }
+  function simpleCycles(ids, neighbors) {
+    const index = new Map(ids.map((id, i) => [id, i])), cycles = [], seen = /* @__PURE__ */ new Set();
+    let budget = 12e3;
+    for (const start of ids) {
+      const visit = (path, used) => {
+        if (--budget < 0 || cycles.length >= 256) return;
+        const last = path.at(-1);
+        for (const next of neighbors.get(last)) {
+          if (next === start && path.length >= 3) {
+            const forward = path.map((id) => index.get(id)), backward = [forward[0], ...forward.slice(1).reverse()];
+            const key = [forward.join(","), backward.join(",")].sort()[0];
+            if (!seen.has(key)) {
+              seen.add(key);
+              cycles.push(path.slice());
+            }
+          } else if (!used.has(next) && index.get(next) > index.get(start)) {
+            used.add(next);
+            path.push(next);
+            visit(path, used);
+            path.pop();
+            used.delete(next);
+          }
+        }
+      };
+      visit([start], /* @__PURE__ */ new Set([start]));
+    }
+    return cycles.sort((a, b) => b.length - a.length);
+  }
+  function planarPositions(positions, links) {
+    if ([...positions.values()].some((p) => !p || !Number.isFinite(p.x) || !Number.isFinite(p.y))) return false;
+    for (const [id, p] of positions) for (const [other, q] of positions) {
+      if (id !== other && Math.hypot(p.x - q.x, p.y - q.y) < 1e-5) return false;
+    }
+    for (let i = 0; i < links.length; i++) {
+      const [a, b] = links[i], p = positions.get(a), q = positions.get(b);
+      for (const [id, r] of positions) {
+        if (id === a || id === b) continue;
+        const dx = q.x - p.x, dy = q.y - p.y, dot = (r.x - p.x) * dx + (r.y - p.y) * dy;
+        if (Math.abs(dx * (r.y - p.y) - dy * (r.x - p.x)) < 1e-7 && dot > 0 && dot < dx * dx + dy * dy) return false;
+      }
+      for (let j = i + 1; j < links.length; j++) {
+        const [c, d] = links[j], hit = segmentIntersection(p, q, positions.get(c), positions.get(d));
+        if (!hit) continue;
+        if (![a, b].some((id) => id === c || id === d) || hit.kind !== "touch") return false;
+      }
+    }
+    return true;
+  }
+  function connectedComponents(ids, neighbors) {
+    const seen = /* @__PURE__ */ new Set(), components = [];
+    for (const start of ids) {
+      if (seen.has(start)) continue;
+      const component = [], queue = [start];
+      seen.add(start);
+      for (let index = 0; index < queue.length; index++) {
+        const id = queue[index];
+        component.push(id);
+        for (const next of neighbors.get(id)) if (!seen.has(next)) {
+          seen.add(next);
+          queue.push(next);
+        }
+      }
+      components.push(component);
+    }
+    return components;
+  }
+  function addCycleEdges(target, cycle) {
+    for (let index = 0; index < cycle.length; index++) {
+      const a = cycle[index], b = cycle[(index + 1) % cycle.length];
+      target.add([a, b].sort().join("\0"));
+    }
+  }
+  function cycleTreePositions(component, neighbors, links, cycles) {
+    for (const cycle of cycles) {
+      if (!cycle.every((id) => component.includes(id))) continue;
+      const boundary = new Set(cycle);
+      const external = component.filter((id) => !boundary.has(id));
+      if (links.length !== cycle.length + external.length) continue;
+      const parent = /* @__PURE__ */ new Map(), visited = new Set(cycle), queue = cycle.slice();
+      for (let index = 0; index < queue.length; index++) {
+        const id = queue[index];
+        for (const next of neighbors.get(id)) {
+          if (visited.has(next)) continue;
+          visited.add(next);
+          parent.set(next, id);
+          queue.push(next);
+        }
+      }
+      if (visited.size !== component.length) continue;
+      const children = new Map(component.map((id) => [id, []]));
+      for (const [id, owner] of parent) children.get(owner).push(id);
+      const position = new Map(cycle.map((id, index) => {
+        const angle = Math.PI * 2 * index / cycle.length - Math.PI / 2;
+        return [id, { x: Math.cos(angle), y: Math.sin(angle) }];
+      }));
+      const placeChildren = (owner, direction) => {
+        const list = children.get(owner) || [];
+        for (let index = 0; index < list.length; index++) {
+          const id = list[index], spread = list.length > 1 ? 0.35 : 0;
+          const baseAngle = Math.atan2(direction.y, direction.x) + (index - (list.length - 1) / 2) * spread;
+          const point = {
+            x: position.get(owner).x + Math.cos(baseAngle) * 1.15,
+            y: position.get(owner).y + Math.sin(baseAngle) * 1.15
+          };
+          position.set(id, point);
+          const length = Math.hypot(point.x - position.get(owner).x, point.y - position.get(owner).y) || 1;
+          placeChildren(id, {
+            x: (point.x - position.get(owner).x) / length,
+            y: (point.y - position.get(owner).y) / length
+          });
+        }
+      };
+      for (const id of cycle) {
+        const point = position.get(id), length = Math.hypot(point.x, point.y) || 1;
+        placeChildren(id, { x: point.x / length, y: point.y / length });
+      }
+      if (planarPositions(position, links)) return position;
+    }
+    return null;
+  }
+  function cyclePairPositions(component, links, cycles) {
+    for (let i = 0; i < cycles.length; i++) for (let j = i + 1; j < cycles.length; j++) {
+      const a = cycles[i], b = cycles[j];
+      if (!a.every((id) => component.includes(id)) || !b.every((id) => component.includes(id))) continue;
+      const shared = a.filter((id) => b.includes(id));
+      if (shared.length !== 1) continue;
+      const cycleEdges = /* @__PURE__ */ new Set();
+      addCycleEdges(cycleEdges, a);
+      addCycleEdges(cycleEdges, b);
+      if (cycleEdges.size !== links.length) continue;
+      const joint = shared[0], position = /* @__PURE__ */ new Map([[joint, { x: 0, y: 0 }]]);
+      const placeCycle = (cycle, direction) => {
+        const order = [joint, ...cycle.filter((id) => id !== joint)];
+        const others = order.slice(1);
+        for (let index = 0; index < others.length; index++) {
+          const angle = Math.PI / 2 - Math.PI * index / Math.max(1, others.length - 1);
+          position.set(others[index], {
+            x: direction * 1.5 + Math.cos(angle),
+            y: Math.sin(angle)
+          });
+        }
+      };
+      placeCycle(a, -1);
+      placeCycle(b, 1);
+      if (planarPositions(position, links)) return position;
+    }
+    return null;
+  }
+  function structuralCandidates(ids, neighbors, links, cycles) {
+    if (!Number.isFinite(Math.sin(0.37)) || !Number.isFinite(Math.cos(0.37))) return [];
+    const components = connectedComponents(ids, neighbors);
+    const nonTrivial = components.filter((component) => component.length > 1);
+    if (nonTrivial.length > 1) return [];
+    let position = /* @__PURE__ */ new Map();
+    if (nonTrivial.length) {
+      const component = nonTrivial[0];
+      position = cycleTreePositions(component, neighbors, links, cycles) || cyclePairPositions(component, links, cycles);
+      if (!position) return [];
+    }
+    const isolated = ids.filter((id) => !nonTrivial.some((component) => component.includes(id)));
+    isolated.forEach((id, index) => position.set(id, { x: -4 - index * 2, y: -4 }));
+    return position.size && planarPositions(position, links) ? [position] : [];
+  }
+  function planarLayoutCandidates(nodes, edges) {
+    if (!Array.isArray(nodes) || !Array.isArray(edges) || nodes.some((node) => !node || typeof node.id !== "string" || !node.id) || new Set(nodes.map((node) => node.id)).size !== nodes.length || edges.some((edge) => !edge || typeof edge.source !== "string" || typeof edge.target !== "string")) return [];
+    if (nodes.length < 3 || nodes.length > 32 || edges.length > 48) return [];
+    const ids = nodes.map((node) => node.id), known = new Set(ids), keys = /* @__PURE__ */ new Set(), links = [];
+    const neighbors = new Map(ids.map((id) => [id, /* @__PURE__ */ new Set()]));
+    for (const edge of edges) {
+      if (!known.has(edge.source) || !known.has(edge.target) || edge.source === edge.target) return [];
+      const key = [edge.source, edge.target].sort().join("\0");
+      if (keys.has(key)) return [];
+      keys.add(key);
+      links.push([edge.source, edge.target]);
+      neighbors.get(edge.source).add(edge.target);
+      neighbors.get(edge.target).add(edge.source);
+    }
+    const candidates = [];
+    const cycles = simpleCycles(ids, neighbors);
+    for (const cycle of cycles) {
+      const boundary = new Set(cycle), internal = ids.filter((id) => !boundary.has(id));
+      const position = new Map(cycle.map((id, index) => {
+        const angle = Math.PI * 2 * index / cycle.length - Math.PI / 2;
+        return [id, { x: Math.cos(angle), y: Math.sin(angle) }];
+      }));
+      const matrix = internal.map((id, i) => internal.map((other, j) => i === j ? neighbors.get(id).size : neighbors.get(id).has(other) ? -1 : 0));
+      const coordinates = ["x", "y"].map((axis) => solve(matrix, internal.map((id) => [...neighbors.get(id)].filter((next) => boundary.has(next)).reduce((sum, next) => sum + position.get(next)[axis], 0))));
+      if (coordinates.some((value) => value === null)) continue;
+      internal.forEach((id, index) => position.set(id, { x: coordinates[0][index], y: coordinates[1][index] }));
+      if (!planarPositions(position, links)) continue;
+      candidates.push(position);
+      if (candidates.length >= 6) break;
+    }
+    const seen = new Set(candidates.map((positions) => JSON.stringify([...positions])));
+    for (const position of structuralCandidates(ids, neighbors, links, cycles)) {
+      const key = JSON.stringify([...position]);
+      if (seen.has(key)) continue;
+      candidates.push(position);
+      seen.add(key);
+      if (candidates.length >= 6) break;
+    }
+    return candidates;
+  }
+
   // src/svg-crossings.js
   var EDGE_SELECTOR = ".flowchart-link,.transition,.relation,.relationshipLine,[data-gptm-source]";
   var GAP = 12;
   var ROUTING_BUDGETS = /* @__PURE__ */ new WeakMap();
+  var SEGMENT_DATA = /* @__PURE__ */ new WeakMap();
+  var ROUTING_VISIT_BUDGET = 18e3;
+  var MAX_ARROW_REPAIR_EDGES = 36;
+  var MAX_GROUP_REROUTE_EDGES = 24;
+  var MAX_SPACING_EXPANSION_EDGES = 24;
+  var MAX_PLANAR_LAYOUT_EDGES = 24;
   var norm = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   var vector = (a, b) => ({ x: b.x - a.x, y: b.y - a.y });
-  var segments = (points) => points.slice(1).flatMap((p, i) => p.move ? [] : [[points[i], p]]);
+  var segments = (points) => points.slice(1).flatMap((p, i) => p.move || norm(points[i], p) < 1e-7 ? [] : [[points[i], p]]);
   var boxOf = (points) => ({
     x: Math.min(...points.map((p) => p.x)),
     y: Math.min(...points.map((p) => p.y)),
@@ -1728,6 +2627,29 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     bottom: Math.max(...points.map((p) => p.y))
   });
   var overlaps2 = (a, b) => a.x <= b.right && a.right >= b.x && a.y <= b.bottom && a.bottom >= b.y;
+  function segmentData(edge) {
+    const cached = SEGMENT_DATA.get(edge);
+    if (cached?.points === edge.points) return cached;
+    const list = segments(edge.points);
+    const data = {
+      points: edge.points,
+      list,
+      boxes: list.map(([p, q]) => boxOf([p, q]))
+    };
+    SEGMENT_DATA.set(edge, data);
+    return data;
+  }
+  function pointMapper(svg, element) {
+    try {
+      const elementMatrix = element.getScreenCTM?.();
+      const svgInverse = svg.getScreenCTM?.()?.inverse?.();
+      if (elementMatrix && svgInverse && typeof DOMPoint === "function") {
+        return (point) => new DOMPoint(point.x, point.y).matrixTransform(elementMatrix).matrixTransform(svgInverse);
+      }
+    } catch {
+    }
+    return (point) => inSvg(svg, element, point);
+  }
   function flattenPath(element) {
     const data = element.getAttribute?.("d");
     if (!data || /[aAbBsStTzZ]/.test(data)) return null;
@@ -1779,18 +2701,99 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     }
     return result.length >= 2 ? result : null;
   }
+  function pathCommandHints(element) {
+    const data = element.getAttribute?.("d") || "";
+    const tokens = data.match(/[MLHVCSQTAZmlhvcsqtaz]|[-+]?(?:\d*\.?\d+)(?:[eE][-+]?\d+)?/g) || [];
+    const counts = { M: 2, L: 2, H: 1, V: 1, Q: 4, C: 6, S: 4, T: 2, A: 7, Z: 0 };
+    let x = 0, y = 0, startX = 0, startY = 0, total = 0, command = null, i = 0, started = false;
+    const hints = [];
+    const endpoint = (values, relative) => ({
+      x: values[0] + (relative ? x : 0),
+      y: values[1] + (relative ? y : 0)
+    });
+    while (i < tokens.length) {
+      if (/^[a-z]$/i.test(tokens[i])) command = tokens[i++];
+      if (!command) return [];
+      const type = command.toUpperCase(), relative = command !== type;
+      if (type === "Z") {
+        total += Math.hypot(startX - x, startY - y);
+        x = startX;
+        y = startY;
+        command = null;
+        hints.push({ position: total, move: false });
+        continue;
+      }
+      const count = counts[type];
+      if (!count || i + count > tokens.length) break;
+      const values = tokens.slice(i, i + count).map(Number);
+      if (values.some((value) => !Number.isFinite(value))) return [];
+      i += count;
+      let nx = x, ny = y;
+      if (type === "M" || type === "L") {
+        const point = endpoint(values, relative);
+        nx = point.x;
+        ny = point.y;
+        if (type === "M") {
+          startX = nx;
+          startY = ny;
+          if (started) hints.push({ position: total, move: true });
+          started = true;
+          command = relative ? "l" : "L";
+          x = nx;
+          y = ny;
+          continue;
+        }
+      } else if (type === "H") {
+        nx = values[0] + (relative ? x : 0);
+      } else if (type === "V") {
+        ny = values[0] + (relative ? y : 0);
+      } else {
+        const point = endpoint(values.slice(-2), relative);
+        nx = point.x;
+        ny = point.y;
+      }
+      total += Math.hypot(nx - x, ny - y);
+      hints.push({ position: total, move: false });
+      x = nx;
+      y = ny;
+    }
+    return hints.filter((hint) => Number.isFinite(hint.position) && hint.position >= 0);
+  }
   function sampleEdge(svg, element) {
+    const mapPoint = pointMapper(svg, element);
     const explicit = flattenPath(element);
     if (explicit) return explicit.map((point) => {
-      const p = inSvg(svg, element, point);
+      const p = mapPoint(point);
       return { x: p.x, y: p.y, ...point.move ? { move: true } : {} };
     });
     const length = element.getTotalLength();
     if (!Number.isFinite(length) || length <= 0) return [];
-    const steps = Math.min(16384, Math.max(2, Math.ceil(length / 0.5)));
-    const input = Array.from({ length: steps + 1 }, (_, i) => {
-      const p = inSvg(svg, element, element.getPointAtLength(length * i / steps));
-      return { x: p.x, y: p.y };
+    const MAX_SAMPLE_POINTS = 32768;
+    const hints = pathCommandHints(element);
+    const hintPositions = [...new Set(hints.map((hint) => hint.position).filter((position) => Number.isFinite(position) && position >= 0 && position <= length))];
+    const positions = /* @__PURE__ */ new Set([0, length]);
+    const addPosition = (value) => {
+      if (positions.size >= MAX_SAMPLE_POINTS) return;
+      const position = Math.max(0, Math.min(length, Number(value)));
+      if (Number.isFinite(position)) positions.add(position);
+    };
+    const baseSteps = Math.min(
+      4096,
+      Math.max(32, Math.ceil(length / 64)),
+      Math.max(8, MAX_SAMPLE_POINTS - hintPositions.length)
+    );
+    for (let i = 0; i <= baseSteps; i++) addPosition(length * i / baseSteps);
+    for (const position of hintPositions) addPosition(position);
+    const seed = [...positions].sort((a, b) => a - b);
+    for (let i = 1; i < seed.length && positions.size < MAX_SAMPLE_POINTS; i++) {
+      const from = seed[i - 1], to = seed[i];
+      for (const fraction of [0.25, 0.5, 0.75]) addPosition(from + (to - from) * fraction);
+    }
+    const ordered = [...positions].sort((a, b) => a - b);
+    const movePositions = new Set(hints.filter((hint) => hint.move).map((hint) => hint.position));
+    const input = ordered.map((position) => {
+      const p = mapPoint(element.getPointAtLength(position));
+      return { x: p.x, y: p.y, ...movePositions.has(position) ? { move: true } : {} };
     });
     const reduce = (lo, hi) => {
       const a = input[lo], b = input[hi], dx = b.x - a.x, dy = b.y - a.y, length2 = Math.hypot(dx, dy);
@@ -1805,35 +2808,116 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       }
       return farthest > 0.2 ? [...reduce(lo, at).slice(0, -1), ...reduce(at, hi)] : [a, b];
     };
-    return reduce(0, input.length - 1);
+    const jumpLimit = Math.max(4, length / 4096);
+    const ranges = [];
+    let rangeStart = 0;
+    for (let i = 1; i < input.length; i++) {
+      if (input[i].move || norm(input[i - 1], input[i]) > jumpLimit) {
+        ranges.push([rangeStart, i - 1]);
+        rangeStart = i;
+      }
+    }
+    ranges.push([rangeStart, input.length - 1]);
+    const result = [];
+    for (const [lo, hi] of ranges) {
+      const part = reduce(lo, hi);
+      if (result.length && part.length) part[0] = { ...part[0], move: true };
+      result.push(...part);
+    }
+    return result;
+  }
+  function edgeElements(svg) {
+    const c4Expected = Number(svg.getAttribute?.("data-gptm-c4-expected")) || 0;
+    return [...svg.querySelectorAll(EDGE_SELECTOR)].filter((element) => !element.closest("defs,marker") && typeof element.getTotalLength === "function" && (!c4Expected || element.getAttribute("data-gptm-c4-relation") === "true"));
+  }
+  function edgeSnapshot(svg, element, semanticNodes2) {
+    const points = sampleEdge(svg, element);
+    if (points.length < 2) return null;
+    const mapPoint = pointMapper(svg, element);
+    const source = element.dataset.gptmSource || semanticNodes2.get(element.dataset.source);
+    const target = element.dataset.gptmTarget || semanticNodes2.get(element.dataset.target);
+    if (source && target) {
+      element.setAttribute("data-gptm-source", source);
+      element.setAttribute("data-gptm-target", target);
+    }
+    return {
+      element,
+      id: element.dataset.id || element.id,
+      points,
+      controls: readPoints(element)?.map((p) => {
+        const q = mapPoint(p);
+        return { x: q.x, y: q.y };
+      }),
+      source,
+      target,
+      shared: element.dataset.gptmSharedTip,
+      box: boxOf(points)
+    };
+  }
+  function semanticNodes(svg) {
+    return new Map([...svg.querySelectorAll("g.node[data-id]")].map((node) => [node.dataset.id, node.id]));
   }
   function collectEdges(svg) {
-    const semanticNodes = new Map([...svg.querySelectorAll("g.node[data-id]")].map((node) => [node.dataset.id, node.id]));
-    return [...svg.querySelectorAll(EDGE_SELECTOR)].filter((element) => !element.closest("defs,marker") && typeof element.getTotalLength === "function").map((element) => {
-      const points = sampleEdge(svg, element);
-      const source = element.dataset.gptmSource || semanticNodes.get(element.dataset.source);
-      const target = element.dataset.gptmTarget || semanticNodes.get(element.dataset.target);
-      if (source && target) {
-        element.setAttribute("data-gptm-source", source);
-        element.setAttribute("data-gptm-target", target);
+    const nodes = semanticNodes(svg);
+    return edgeElements(svg).map((element) => edgeSnapshot(svg, element, nodes)).filter(Boolean);
+  }
+  function createRoutingContext(svg) {
+    const nodes = semanticNodes(svg);
+    let edges = null;
+    let model = null;
+    let edgeById = /* @__PURE__ */ new Map();
+    let labelById = /* @__PURE__ */ new Map();
+    const getEdges = () => {
+      if (edges) return edges;
+      edges = edgeElements(svg).map((element) => edgeSnapshot(svg, element, nodes)).filter(Boolean);
+      edgeById = new Map(edges.map((edge) => [edge.id, edge]));
+      return edges;
+    };
+    const getModel = () => {
+      if (model) return model;
+      model = geometry(svg);
+      labelById = new Map(model.labels.map((label) => [label.id, label]));
+      return model;
+    };
+    return {
+      edges: getEdges,
+      model: getModel,
+      findEdge(id) {
+        getEdges();
+        return edgeById.get(id);
+      },
+      labelFor(id) {
+        getModel();
+        return labelById.get(id);
+      },
+      refreshEdge(id) {
+        if (!edges) return null;
+        const index = edges.findIndex((edge) => edge.id === id);
+        if (index < 0) return null;
+        const fresh = edgeSnapshot(svg, edges[index].element, nodes);
+        if (fresh) {
+          edges[index] = fresh;
+          edgeById.set(id, fresh);
+        } else {
+          edges.splice(index, 1);
+          edgeById.delete(id);
+        }
+        return fresh;
+      },
+      invalidateModel() {
+        model = null;
+        labelById = /* @__PURE__ */ new Map();
+      },
+      invalidateAll() {
+        edges = null;
+        model = null;
+        edgeById = /* @__PURE__ */ new Map();
+        labelById = /* @__PURE__ */ new Map();
       }
-      return {
-        element,
-        id: element.dataset.id || element.id,
-        points,
-        controls: readPoints(element)?.map((p) => {
-          const q = inSvg(svg, element, p);
-          return { x: q.x, y: q.y };
-        }),
-        source,
-        target,
-        shared: element.dataset.gptmSharedTip,
-        box: points.length ? boxOf(points) : null
-      };
-    }).filter((edge) => edge.points.length >= 2);
+    };
   }
   function allowedJunction(a, b, hit) {
-    if (a.shared && a.shared === b.shared) {
+    if (a.shared && a.shared === b.shared && a.target && b.target && a.target === b.target) {
       const commonSegments = [];
       let i = a.points.length - 1, j = b.points.length - 1, end = a.points[i];
       if (norm(end, b.points[j]) < 0.05) while (i > 0 && j > 0) {
@@ -1861,10 +2945,24 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     }
     for (const [ownerA, p] of [[a.source, a.points[0]], [a.target, a.points.at(-1)]]) {
       for (const [ownerB, q] of [[b.source, b.points[0]], [b.target, b.points.at(-1)]]) {
-        if (ownerA && ownerA === ownerB && norm(p, hit) < 2 && norm(q, hit) < 2) return true;
+        if (ownerA && ownerA === ownerB && hit.kind === "touch" && norm(p, hit) < 0.05 && norm(q, hit) < 0.05) return true;
       }
     }
     return false;
+  }
+  function selfIntersectionHits(points) {
+    const list = segments(points), hits = [];
+    const start = points[0], end = points.at(-1);
+    for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+      const [p, q] = list[i], [r, s] = list[j];
+      if (!overlaps2(boxOf([p, q]), boxOf([r, s]))) continue;
+      const hit = segmentIntersection(p, q, r, s);
+      if (!hit) continue;
+      if (j === i + 1 && hit.kind === "touch") continue;
+      if (hit.kind === "touch" && norm(start, end) < 0.05 && norm(start, hit) < 0.05) continue;
+      if (!hits.some((other) => norm(other, hit) < 1)) hits.push(hit);
+    }
+    return hits;
   }
   function crossingPairs(edges) {
     const pairs = [];
@@ -1872,12 +2970,18 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       const a = edges[i], b = edges[j];
       if (!overlaps2(a.box, b.box)) continue;
       const hits = [];
-      for (const [p, q] of segments(a.points)) for (const [r, s] of segments(b.points)) {
-        if (!overlaps2(boxOf([p, q]), boxOf([r, s]))) continue;
+      const dataA = segmentData(a), dataB = segmentData(b);
+      for (let ai = 0; ai < dataA.list.length; ai++) for (let bi = 0; bi < dataB.list.length; bi++) {
+        const [p, q] = dataA.list[ai], [r, s] = dataB.list[bi];
+        if (!overlaps2(dataA.boxes[ai], dataB.boxes[bi])) continue;
         const hit = segmentIntersection(p, q, r, s);
         if (hit && !allowedJunction(a, b, hit) && !hits.some((h) => norm(h, hit) < 1)) hits.push(hit);
       }
       if (hits.length) pairs.push({ a: a.id, b: b.id, hits });
+    }
+    for (const edge of edges) {
+      const hits = selfIntersectionHits(edge.points);
+      if (hits.length) pairs.push({ a: edge.id, b: edge.id, hits, self: true });
     }
     return pairs;
   }
@@ -1900,6 +3004,38 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       { x: p.x + v.x * depth - v.y * half, y: p.y + v.y * depth + v.x * half }
     ]);
   }
+  function coveredArrow(svg, edge, model) {
+    if (!triangleCompatible(edge.element)) return false;
+    for (const start of [true, false]) {
+      if (!edge.element.hasAttribute(start ? "marker-start" : "marker-end")) continue;
+      const owner = model.nodes.find((n) => n.id === (start ? edge.source : edge.target));
+      if (!owner) continue;
+      const shape = nodeShape(owner.element);
+      const shapes = shape instanceof SVGGeometryElement ? [shape] : [...shape.querySelectorAll("path,rect,circle,ellipse,polygon")];
+      const pathLength = edge.element.getTotalLength();
+      const tip = inSvg(svg, edge.element, edge.element.getPointAtLength(start ? 0 : pathLength));
+      const q = inSvg(svg, edge.element, edge.element.getPointAtLength(start ? Math.min(0.02, pathLength) : Math.max(0, pathLength - 0.02)));
+      const magnitude = norm(tip, q);
+      if (!magnitude) continue;
+      const v = { x: (q.x - tip.x) / magnitude, y: (q.y - tip.y) / magnitude };
+      const depth = Math.min(
+        18,
+        (Number(edge.element.dataset.gptmPortSpan) || Infinity) * 0.875,
+        Math.max(11, Math.max(svg.viewBox.baseVal.width, svg.viewBox.baseVal.height) / 100)
+      );
+      for (const t of [0.15, 0.4, 0.8]) for (const across of [-0.8, 0, 0.8]) {
+        const p = {
+          x: tip.x + v.x * depth * t - v.y * depth * 0.4 * t * across,
+          y: tip.y + v.y * depth * t + v.x * depth * 0.4 * t * across
+        };
+        if (shapes.some((shape2) => {
+          const q2 = fromSvg(svg, shape2, p), style = getComputedStyle(shape2);
+          return style.fill !== "none" && shape2.isPointInFill(q2) || style.stroke !== "none" && shape2.isPointInStroke(q2);
+        })) return true;
+      }
+    }
+    return false;
+  }
   function portsFor(node, anchor, adjacent, alternatives) {
     const b = node.box, v = vector(anchor, adjacent);
     const side = Math.abs(v.x) > Math.abs(v.y) ? v.x > 0 ? "right" : "left" : v.y > 0 ? "bottom" : "top";
@@ -1919,24 +3055,29 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       const shape = nodeShape(element);
       return shape && { element, id: element.id, box: boundsInSvg(svg, shape) };
     }).filter(Boolean);
-    const labels = [...svg.querySelectorAll("g.edgeLabel")].filter((l) => l.textContent.trim()).map((element) => ({
+    const labels = [
+      ...svg.querySelectorAll("g.edgeLabel"),
+      ...svg.querySelectorAll("[data-gptm-c4-boundary] > text")
+    ].filter((l) => String(l.textContent || "").trim()).map((element) => ({
       element,
       id: element.querySelector("[data-id]")?.dataset.id || element.dataset.id,
       box: boundsInSvg(svg, element)
     }));
     return { nodes, labels };
   }
-  function applyReservation(svg, edge, reservation) {
+  function applyReservation(svg, edge, reservation, context = null) {
     if (!reservation) return;
     edge.element.setAttribute("data-gptm-label-x", String(reservation.x));
     edge.element.setAttribute("data-gptm-label-y", String(reservation.y));
-    const label = geometry(svg).labels.find((label2) => label2.id === edge.id);
-    if (label) translateInRoot(
+    const label = context ? context.labelFor(edge.id) : geometry(svg).labels.find((item) => item.id === edge.id);
+    if (!label) return;
+    translateInRoot(
       svg,
       label.element,
       reservation.x - (label.box.x + label.box.right) / 2,
       reservation.y - (label.box.y + label.box.bottom) / 2
     );
+    label.box = boundsInSvg(svg, label.element);
   }
   function planAvoidance(svg, edge, edges, model, alternatives = false) {
     const budget = ROUTING_BUDGETS.get(svg);
@@ -2027,8 +3168,8 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     }
     return best;
   }
-  function avoidEdgeCrossings(svg) {
-    let edges = collectEdges(svg), pairs = crossingPairs(edges), changed = 0;
+  function avoidEdgeCrossings(svg, context = createRoutingContext(svg)) {
+    let edges = context.edges(), pairs = crossingPairs(edges), changed = 0;
     const initial = pairs.length;
     for (let pass = 0; pass < 2 && pairs.length; pass++) {
       let progress = false;
@@ -2037,19 +3178,22 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       const order = [...count].sort((a, b) => b[1] - a[1]).map(([id]) => id);
       for (const id of order) {
         if (!pairs.some((p) => p.a === id || p.b === id)) continue;
-        const edge = edges.find((e) => e.id === id), model = geometry(svg);
+        const edge = context.findEdge(id), model = context.model();
+        if (!edge) continue;
         const plan = planAvoidance(svg, edge, edges, model, pass > 0);
         if (!plan) continue;
         const original = edge.element.getAttribute("d"), data = edge.element.getAttribute("data-points");
         writePoints(svg, edge.element, plan.points);
-        const updated = collectEdges(svg), next = crossingPairs(updated);
+        context.refreshEdge(id);
+        const updated = context.edges(), next = crossingPairs(updated);
         if (next.length >= pairs.length) {
           edge.element.setAttribute("d", original);
           if (data === null) edge.element.removeAttribute("data-points");
           else edge.element.setAttribute("data-points", data);
+          context.refreshEdge(id);
           continue;
         }
-        applyReservation(svg, edge, plan.reservation);
+        applyReservation(svg, edge, plan.reservation, context);
         edge.element.setAttribute("data-gptm-crossing-rerouted", "true");
         edges = updated;
         pairs = next;
@@ -2060,20 +3204,26 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     }
     if (changed) {
       for (const id of edges.filter((edge) => edge.element.hasAttribute("data-gptm-native-rerouted") || edge.element.hasAttribute("data-gptm-crossing-rerouted")).map((edge) => edge.id)) {
-        const edge = edges.find((e) => e.id === id), raw = readPoints(edge.element);
+        const edge = context.findEdge(id);
+        if (!edge) continue;
+        const raw = readPoints(edge.element);
         if (!raw) continue;
         const oldScore = routeQuality(raw.map((p) => inSvg(svg, edge.element, p))).score;
-        const plan = planAvoidance(svg, edge, edges, geometry(svg), true);
+        const plan = planAvoidance(svg, edge, edges, context.model(), true);
         if (!plan || plan.score >= oldScore - 1) continue;
         const original = edge.element.getAttribute("d"), data = edge.element.getAttribute("data-points");
         writePoints(svg, edge.element, plan.points);
-        const updated = collectEdges(svg), next = crossingPairs(updated);
+        context.refreshEdge(id);
+        const updated = context.edges(), next = crossingPairs(updated);
         if (next.length > pairs.length) {
-          edge.element.setAttribute("d", original);
-          edge.element.setAttribute("data-points", data);
+          if (original === null) edge.element.removeAttribute("d");
+          else edge.element.setAttribute("d", original);
+          if (data === null) edge.element.removeAttribute("data-points");
+          else edge.element.setAttribute("data-points", data);
+          context.refreshEdge(id);
           continue;
         }
-        applyReservation(svg, edge, plan.reservation);
+        applyReservation(svg, edge, plan.reservation, context);
         edges = updated;
         pairs = next;
       }
@@ -2086,12 +3236,19 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     const edges = collectEdges(svg), pairs = crossingPairs(edges);
     for (const edge of edges) edge.element.removeAttribute("data-gptm-crossing");
     for (const pair of pairs) for (const id of [pair.a, pair.b]) {
-      edges.find((e) => e.id === id).element.setAttribute("data-gptm-crossing", "true");
+      edges.find((e) => e.id === id)?.element.setAttribute("data-gptm-crossing", "true");
     }
+    const c4Expected = Number(svg.getAttribute?.("data-gptm-c4-expected")) || 0;
+    const storedSkipped = Number(svg.getAttribute?.("data-gptm-skipped-edges")) || 0;
+    const expected = c4Expected || edges.length;
+    const skipped = c4Expected ? Math.max(storedSkipped, c4Expected - edges.length) : 0;
     svg.setAttribute("data-gptm-crossings", String(pairs.length));
     svg.setAttribute("data-gptm-checked-edges", String(edges.length));
-    svg.setAttribute("data-gptm-routing-status", !edges.length ? "not-applicable" : pairs.length ? "unresolved" : "clear");
-    svg.setAttribute("data-gptm-routing-reason", !pairs.length ? "" : exceedsPlanarEdgeBound(edges) ? "non-planar-edge-bound" : svg.getAttribute("data-gptm-routing-budget-exhausted") === "true" ? "search-budget" : "fixed-obstacles");
+    svg.setAttribute("data-gptm-expected-edges", String(expected));
+    svg.setAttribute("data-gptm-skipped-edges", String(skipped));
+    const incomplete = skipped > 0;
+    svg.setAttribute("data-gptm-routing-status", incomplete ? "unresolved" : !edges.length ? "not-applicable" : pairs.length ? "unresolved" : "clear");
+    svg.setAttribute("data-gptm-routing-reason", incomplete ? "incomplete-relations" : !pairs.length ? "" : pairs.some((pair) => pair.self) ? "self-intersection" : exceedsPlanarEdgeBound(edges) ? "non-planar-edge-bound" : svg.getAttribute("data-gptm-routing-budget-exhausted") === "true" ? "search-budget" : svg.getAttribute("data-gptm-routing-limited") === "true" ? "complexity-cap" : "fixed-obstacles");
     return pairs;
   }
   function snapshotAttributes(element) {
@@ -2141,6 +3298,114 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     bestState.forEach(({ element, attributes }) => restoreAttributes(element, attributes));
     return true;
   }
+  function tryPlanarLayout(svg, repairConnections) {
+    const model = geometry(svg), edges = collectEdges(svg);
+    if (svg.querySelector("g.cluster,g.note,.c4-boundary") || model.nodes.some((n) => n.element.parentElement.closest("g.node")) || edges.some((e) => e.shared || !e.source || !e.target)) return false;
+    const candidates = planarLayoutCandidates(model.nodes, edges);
+    if (!candidates.length) {
+      svg.setAttribute("data-gptm-planar-layout-support", "unsupported");
+      return false;
+    }
+    const baseline = svg.cloneNode(true);
+    const restore = () => svg.replaceChildren(...[...baseline.childNodes].map((n) => n.cloneNode(true)));
+    const layouts = [];
+    for (const sourcePositions of candidates) for (const ratio of [0.8, 1, 1.25]) for (let turn = 0; turn < 6; turn++) {
+      const angle = turn * Math.PI / 6, positions = new Map([...sourcePositions].map(([id, p]) => [
+        id,
+        {
+          x: (p.x * Math.cos(angle) - p.y * Math.sin(angle)) * ratio,
+          y: p.x * Math.sin(angle) + p.y * Math.cos(angle)
+        }
+      ]));
+      let scale = 180;
+      const labelSpan = Math.max(60, ...model.labels.map((l) => Math.hypot(l.box.width, l.box.height)));
+      for (let i = 0; i < model.nodes.length; i++) for (let j = i + 1; j < model.nodes.length; j++) {
+        const a = model.nodes[i], b = model.nodes[j], p = positions.get(a.id), q = positions.get(b.id);
+        scale = Math.max(scale, Math.min(
+          ((a.box.width + b.box.width) / 2 + labelSpan + 36) / Math.abs(p.x - q.x),
+          ((a.box.height + b.box.height) / 2 + labelSpan + 36) / Math.abs(p.y - q.y)
+        ));
+      }
+      for (const edge of edges) {
+        const a = positions.get(edge.source), b = positions.get(edge.target), v = vector(a, b), length2 = v.x * v.x + v.y * v.y;
+        for (const node of model.nodes) {
+          if (node.id === edge.source || node.id === edge.target) continue;
+          const p = positions.get(node.id), t = Math.max(0, Math.min(1, ((p.x - a.x) * v.x + (p.y - a.y) * v.y) / length2));
+          const distance2 = norm(p, { x: a.x + t * v.x, y: a.y + t * v.y });
+          scale = Math.max(scale, (Math.hypot(node.box.width, node.box.height) / 2 + 20) / distance2);
+        }
+      }
+      const bounds = boxOf([...positions.values()]);
+      layouts.push({ positions, scale, area: (bounds.right - bounds.x) * (bounds.bottom - bounds.y) * scale ** 2 });
+    }
+    layouts.sort((a, b) => a.area - b.area);
+    for (const { positions, scale } of layouts.slice(0, 8)) {
+      if (!Number.isFinite(scale) || scale > 5e3) continue;
+      restore();
+      const current = geometry(svg), liveEdges = collectEdges(svg), boxes = /* @__PURE__ */ new Map();
+      const point = (id) => ({ x: (positions.get(id).x + 1) * scale + 24, y: (positions.get(id).y + 1) * scale + 24 });
+      for (const node of current.nodes) {
+        const p = point(node.id), dx = p.x - (node.box.x + node.box.right) / 2, dy = p.y - (node.box.y + node.box.bottom) / 2;
+        translateInRoot(svg, node.element, dx, dy);
+        boxes.set(node.id, {
+          x: p.x - node.box.width / 2,
+          y: p.y - node.box.height / 2,
+          right: p.x + node.box.width / 2,
+          bottom: p.y + node.box.height / 2,
+          width: node.box.width,
+          height: node.box.height
+        });
+      }
+      for (const edge of liveEdges) {
+        const a = point(edge.source), b = point(edge.target), v = vector(a, b), length = norm(a, b);
+        const port = (center, box, sign, start) => {
+          const t = Math.min(Math.abs(box.width / 2 / v.x), Math.abs(box.height / 2 / v.y));
+          const oldAnchor = start ? edge.controls?.[0] : edge.controls?.at(-1), oldTip = start ? edge.points[0] : edge.points.at(-1);
+          const offset = !triangleCompatible(edge.element) && oldAnchor ? norm(oldAnchor, oldTip) : 0;
+          return { x: center.x + sign * v.x * (t + offset / length), y: center.y + sign * v.y * (t + offset / length) };
+        };
+        writePoints(svg, edge.element, [port(a, boxes.get(edge.source), 1, true), port(b, boxes.get(edge.target), -1, false)]);
+        edge.element.removeAttribute("data-gptm-label-x");
+        edge.element.removeAttribute("data-gptm-label-y");
+      }
+      repairConnections(svg);
+      const plannedEdges = collectEdges(svg), plannedModel = geometry(svg), reserved = [];
+      let valid = true;
+      for (const label of plannedModel.labels.sort((a, b) => b.box.width - a.box.width)) {
+        const edge = plannedEdges.find((e) => e.id === label.id);
+        if (!edge) {
+          valid = false;
+          break;
+        }
+        const size = {
+          ...label.box,
+          x: (edge.points[0].x + edge.points.at(-1).x) / 2 - label.box.width / 2,
+          y: (edge.points[0].y + edge.points.at(-1).y) / 2 - label.box.height / 2
+        };
+        const walls = plannedEdges.filter((e) => e !== edge).flatMap((e) => segments(e.points));
+        const barriers = [
+          ...boxes.values(),
+          ...reserved,
+          ...plannedEdges.flatMap((e) => [endpointShield(e, true), endpointShield(e, false)]).filter(Boolean)
+        ];
+        const position = labelOnRoute(svg, edge.points, size, barriers, walls);
+        if (!position) {
+          valid = false;
+          break;
+        }
+        applyReservation(svg, edge, position);
+        reserved.push(position.box);
+      }
+      if (valid && crossingPairs(collectEdges(svg)).length === 0) {
+        svg.setAttribute("data-gptm-planar-layout", "structured-candidate");
+        svg.setAttribute("data-gptm-planar-layout-support", "candidate");
+        return true;
+      }
+    }
+    restore();
+    svg.setAttribute("data-gptm-planar-layout-support", "unsupported");
+    return false;
+  }
   function translateInRoot(svg, element, dx, dy) {
     const a = fromSvg(svg, element.parentElement, { x: 0, y: 0 });
     const b = fromSvg(svg, element.parentElement, { x: dx, y: dy });
@@ -2185,36 +3450,76 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     return true;
   }
   function resolveEdgeCrossings(svg, repairConnections) {
-    ROUTING_BUDGETS.set(svg, { remaining: 3e4 });
-    const first = avoidEdgeCrossings(svg);
+    const budget = { remaining: ROUTING_VISIT_BUDGET };
+    ROUTING_BUDGETS.set(svg, budget);
+    const context = createRoutingContext(svg);
+    const initialEdges = context.edges();
+    let limited = initialEdges.length > MAX_ARROW_REPAIR_EDGES;
+    let arrowRepairs = 0;
+    const arrowEdges = [...initialEdges].sort((a, b) => Number(b.element.hasAttribute("marker-end")) - Number(a.element.hasAttribute("marker-end"))).slice(0, MAX_ARROW_REPAIR_EDGES);
+    for (const edge of arrowEdges) {
+      if (budget.remaining <= 0) break;
+      const model = context.model();
+      if (!coveredArrow(svg, edge, model)) continue;
+      const plan = planAvoidance(svg, edge, context.edges(), model, true);
+      if (!plan) continue;
+      const attributes = snapshotAttributes(edge.element);
+      writePoints(svg, edge.element, plan.points);
+      repairConnections(svg, edge.element);
+      const updated = context.refreshEdge(edge.id);
+      if (!updated || coveredArrow(svg, updated, model)) {
+        restoreAttributes(edge.element, attributes);
+        context.refreshEdge(edge.id);
+        continue;
+      }
+      applyReservation(svg, edge, plan.reservation, context);
+      edge.element.setAttribute("data-gptm-arrow-approach-repaired", "true");
+      arrowRepairs++;
+    }
+    if (arrowRepairs) {
+      placeEdgeLabels(svg);
+      context.invalidateModel();
+    }
+    const first = avoidEdgeCrossings(svg, context);
     if (first.changed) {
       repairConnections(svg);
+      context.invalidateAll();
       placeEdgeLabels(svg);
+      context.invalidateModel();
     }
-    let remaining = crossingPairs(collectEdges(svg)).length;
-    if (remaining && !exceedsPlanarEdgeBound(collectEdges(svg)) && rerouteConflictGroup(svg)) {
+    let currentEdges = context.edges();
+    let remaining = crossingPairs(currentEdges).length;
+    if (remaining && currentEdges.length <= MAX_GROUP_REROUTE_EDGES && !exceedsPlanarEdgeBound(currentEdges) && rerouteConflictGroup(svg)) {
       repairConnections(svg);
       placeEdgeLabels(svg);
-      remaining = crossingPairs(collectEdges(svg)).length;
+      context.invalidateAll();
+      currentEdges = context.edges();
+      remaining = crossingPairs(currentEdges).length;
+    } else if (remaining && currentEdges.length > MAX_GROUP_REROUTE_EDGES) {
+      limited = true;
     }
     let expanded = 1;
-    if (remaining > 0 && !exceedsPlanarEdgeBound(collectEdges(svg))) {
+    if (remaining > 0 && currentEdges.length <= MAX_SPACING_EXPANSION_EDGES && !exceedsPlanarEdgeBound(currentEdges)) {
       const baseline = svg.cloneNode(true);
       const restore = () => {
         for (const attribute of [...svg.attributes]) svg.removeAttribute(attribute.name);
         for (const attribute of baseline.attributes) svg.setAttribute(attribute.name, attribute.value);
         svg.replaceChildren(...[...baseline.childNodes].map((node) => node.cloneNode(true)));
+        context.invalidateAll();
       };
       for (const factor of [1.45, 2]) {
         restore();
         if (!expandFlatSpacing(svg, factor)) break;
+        context.invalidateAll();
         repairConnections(svg);
         placeEdgeLabels(svg);
-        avoidEdgeCrossings(svg);
+        context.invalidateAll();
+        avoidEdgeCrossings(svg, context);
         rerouteConflictGroup(svg);
         repairConnections(svg);
         placeEdgeLabels(svg);
-        const count = crossingPairs(collectEdges(svg)).length;
+        context.invalidateAll();
+        const count = crossingPairs(context.edges()).length;
         if (count < remaining) {
           remaining = count;
           expanded = factor;
@@ -2222,10 +3527,23 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         }
       }
       if (expanded === 1) restore();
+    } else if (remaining > 0 && currentEdges.length > MAX_SPACING_EXPANSION_EDGES) {
+      limited = true;
+    }
+    currentEdges = context.edges();
+    if (remaining > 0 && currentEdges.length <= MAX_PLANAR_LAYOUT_EDGES && !exceedsPlanarEdgeBound(currentEdges) && tryPlanarLayout(svg, repairConnections)) {
+      context.invalidateAll();
+      placeEdgeLabels(svg);
+      context.invalidateModel();
+      remaining = crossingPairs(context.edges()).length;
+    } else if (remaining > 0 && currentEdges.length > MAX_PLANAR_LAYOUT_EDGES) {
+      limited = true;
     }
     svg.setAttribute("data-gptm-crossings-before", String(first.before));
     svg.setAttribute("data-gptm-spacing-factor", String(expanded));
-    svg.setAttribute("data-gptm-routing-budget-exhausted", String(ROUTING_BUDGETS.get(svg).remaining <= 0));
+    svg.setAttribute("data-gptm-arrow-approach-repairs", String(arrowRepairs));
+    svg.setAttribute("data-gptm-routing-budget-exhausted", String(budget.remaining <= 0));
+    svg.setAttribute("data-gptm-routing-limited", String(limited));
     return { ...first, remaining, expanded };
   }
   function exceedsPlanarEdgeBound(edges) {
@@ -2239,10 +3557,165 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     return vertices.size >= 3 && links.size > 3 * vertices.size - 6;
   }
 
+  // src/runtime-guard.js
+  var DEFAULT_RENDER_TIMEOUT_MS = 12e3;
+  var DEFAULT_RUNTIME_TIMEOUT_MS = 15e3;
+  function namedError(name, message, cause) {
+    const error = new Error(message);
+    error.name = name;
+    if (cause !== void 0) error.cause = cause;
+    return error;
+  }
+  function abortError(message = "gpt-mermaid: render aborted", cause) {
+    return namedError("AbortError", message, cause);
+  }
+  function timeoutError(message = "gpt-mermaid: render timed out", cause) {
+    return namedError("TimeoutError", message, cause);
+  }
+  function positiveTimeout(value, fallback = DEFAULT_RENDER_TIMEOUT_MS) {
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+  }
+  function throwIfAborted(signal) {
+    if (!signal?.aborted) return;
+    throw signal.reason instanceof Error ? signal.reason : abortError(void 0, signal.reason);
+  }
+  function withAbortTimeout(value, {
+    signal,
+    timeoutMs = DEFAULT_RENDER_TIMEOUT_MS,
+    timeoutMessage
+  } = {}) {
+    throwIfAborted(signal);
+    let timer = 0;
+    let cleaned = false;
+    const promise = Promise.resolve(value);
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        if (cleaned) return;
+        cleaned = true;
+        if (timer) clearTimeout(timer);
+        signal?.removeEventListener?.("abort", onAbort);
+      };
+      const finish = (callback, result) => {
+        cleanup();
+        callback(result);
+      };
+      const onAbort = () => finish(
+        reject,
+        signal?.reason instanceof Error ? signal.reason : abortError(void 0, signal?.reason)
+      );
+      const ms = Number(timeoutMs);
+      if (Number.isFinite(ms) && ms > 0) {
+        timer = setTimeout(() => finish(reject, timeoutError(timeoutMessage)), ms);
+      }
+      signal?.addEventListener?.("abort", onAbort, { once: true });
+      promise.then(
+        (result) => finish(resolve, result),
+        (error) => finish(reject, error)
+      );
+    });
+  }
+  function createSerialScheduler() {
+    const queue = [];
+    let running = false;
+    let active = null;
+    function schedule(run, {
+      signal,
+      timeoutMs = DEFAULT_RENDER_TIMEOUT_MS,
+      timeoutMessage
+    } = {}) {
+      return new Promise((resolve, reject) => {
+        const item = {
+          run,
+          signal,
+          timeoutMs,
+          timeoutMessage,
+          resolve,
+          reject,
+          controller: new AbortController(),
+          started: false,
+          cancelled: false,
+          onExternalAbort: null
+        };
+        const cancelQueued = (reason) => {
+          if (item.cancelled) return;
+          item.cancelled = true;
+          item.signal?.removeEventListener?.("abort", item.onExternalAbort);
+          reject(reason instanceof Error ? reason : abortError(void 0, reason));
+        };
+        item.onExternalAbort = () => {
+          const reason = signal?.reason instanceof Error ? signal.reason : abortError(void 0, signal?.reason);
+          if (item.started) item.controller.abort(reason);
+          else cancelQueued(reason);
+        };
+        if (signal?.aborted) {
+          cancelQueued(signal.reason);
+          return;
+        }
+        signal?.addEventListener?.("abort", item.onExternalAbort, { once: true });
+        queue.push(item);
+        void drain();
+      });
+    }
+    async function drain() {
+      if (running) return;
+      running = true;
+      try {
+        while (queue.length) {
+          const item = queue.shift();
+          if (item.cancelled) continue;
+          item.started = true;
+          active = item;
+          try {
+            const result = await withAbortTimeout(item.run(item.controller.signal), {
+              signal: item.signal,
+              timeoutMs: item.timeoutMs,
+              timeoutMessage: item.timeoutMessage
+            });
+            item.resolve(result);
+          } catch (error) {
+            item.controller.abort(error);
+            item.reject(error);
+          } finally {
+            item.signal?.removeEventListener?.("abort", item.onExternalAbort);
+            active = null;
+          }
+        }
+      } finally {
+        running = false;
+        if (queue.length) void drain();
+      }
+    }
+    return {
+      schedule,
+      pending: () => queue.length,
+      active: () => active
+    };
+  }
+
   // src/render.js
   var FLOWCHART_RE = /^\s*(?:flowchart|graph)\b/im;
+  var FRONTMATTER_FENCE_RE = /^---\s*$/;
+  function bodyAfterFrontmatter(lines) {
+    let start = 0;
+    while (start < lines.length) {
+      const line = lines[start].replace(/^\uFEFF/, "");
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("%%")) {
+        start++;
+        continue;
+      }
+      break;
+    }
+    if (start >= lines.length || !FRONTMATTER_FENCE_RE.test(lines[start].replace(/^\uFEFF/, ""))) {
+      return lines;
+    }
+    for (let end = start + 1; end < lines.length; end++) {
+      if (FRONTMATTER_FENCE_RE.test(lines[end])) return lines.slice(end + 1);
+    }
+    return lines;
+  }
   function isFlowchart(source) {
-    for (const line of source.split(/\r?\n/)) {
+    for (const line of bodyAfterFrontmatter(String(source || "").split(/\r?\n/))) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith("%%")) continue;
       return FLOWCHART_RE.test(line);
@@ -2537,9 +4010,10 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     );
     if (next !== data) path.setAttribute("d", next);
   }
-  function repairEdgeConnections(svg) {
+  function repairEdgeConnections(svg, onlyElement = null) {
     const outlines = nodeOutlines(svg);
-    for (const edge of svg.querySelectorAll(`${CONNECTED_EDGE_SELECTOR}, [data-gptm-source]`)) {
+    const elements = onlyElement ? onlyElement.matches?.(`${CONNECTED_EDGE_SELECTOR}, [data-gptm-source]`) ? [onlyElement] : [] : svg.querySelectorAll(`${CONNECTED_EDGE_SELECTOR}, [data-gptm-source]`);
+    for (const edge of elements) {
       const points = layoutPoints(edge);
       if (!points) continue;
       for (const atStart of [true, false]) {
@@ -2689,7 +4163,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       repairSequenceConnections(live);
       placeEdgeLabels(live);
       resolveEdgeCrossings(live, repairEdgeConnections);
-      if (graph || Number(live.getAttribute("data-gptm-native-routes")) > 0) fitSvgBounds(live);
+      if (graph || Number(live.getAttribute("data-gptm-native-routes")) > 0 || live.hasAttribute("data-gptm-planar-layout") || Number(live.getAttribute("data-gptm-spacing-factor")) > 1) fitSvgBounds(live);
       colorDirectionalEdges(live, variables);
       const shafts = trimArrowShafts(live);
       live.setAttribute("data-gptm-trimmed-shafts", String(shafts.trimmed));
@@ -2730,11 +4204,12 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
   }
   function createRenderer(baseUrl = document.baseURI) {
     let runtimePromise = null;
-    let renderChain = Promise.resolve();
+    const renderQueue = createSerialScheduler();
     let sequence = 0;
     let initialized = false;
     let configKey = "";
-    async function runtime(config) {
+    async function runtime(config = {}, signal) {
+      throwIfAborted(signal);
       if (config.runtime && typeof config.runtime.render === "function") return config.runtime;
       if (globalThis.mermaid?.render) return globalThis.mermaid;
       if (!runtimePromise) {
@@ -2747,7 +4222,11 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
           throw error;
         });
       }
-      return runtimePromise;
+      return withAbortTimeout(runtimePromise, {
+        signal,
+        timeoutMs: positiveTimeout(config.runtimeTimeoutMs, DEFAULT_RUNTIME_TIMEOUT_MS),
+        timeoutMessage: "gpt-mermaid: runtime load timed out"
+      });
     }
     function initialize(mermaid, config, flowchart) {
       const layout = flowchart ? "elk" : "dagre";
@@ -2798,19 +4277,27 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       initialized = true;
       configKey = nextKey;
     }
-    async function renderSvg(rawSource, config) {
+    async function renderSvg(rawSource, config = {}) {
       const source = sanitizeMermaidSource(rawSource);
       if (!source) throw new Error("gpt-mermaid: diagram source is empty or contains blocked directives");
-      const task = renderChain.then(async () => {
+      const timeoutMs = positiveTimeout(
+        config.renderTimeoutMs ?? config.timeoutMs,
+        DEFAULT_RENDER_TIMEOUT_MS
+      );
+      return renderQueue.schedule(async (signal) => {
+        throwIfAborted(signal);
         const flowchart = isFlowchart(source);
-        const mermaid = await runtime(config);
+        const mermaid = await runtime(config, signal);
+        throwIfAborted(signal);
         initialize(mermaid, config, flowchart);
         const id = `mgpt-${Date.now().toString(36)}-${++sequence}`;
         const result = await mermaid.render(id, source);
+        throwIfAborted(signal);
         if (!result?.svg) throw new Error("gpt-mermaid: renderer returned no SVG");
         let graph;
         if (mermaid.mermaidAPI?.getDiagramFromText && (flowchart || /^\s*C4\w+/m.test(source))) {
           const diagram = await mermaid.mermaidAPI.getDiagramFromText(source);
+          throwIfAborted(signal);
           if (flowchart && diagram.db.getData) graph = { ...diagram.db.getData(), direction: diagram.db.getDirection() };
           else if (diagram.db.getRels) graph = { c4Nodes: diagram.db.getC4ShapeArray(), c4Relations: diagram.db.getRels() };
         }
@@ -2821,6 +4308,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
           svg = svg.replace(/<svg\b[^>]*>/, (tag) => `${tag}${style}`);
         }
         const processed = postProcessSvg(svg, config.themeVariables, graph, config);
+        throwIfAborted(signal);
         const clean = sanitizeSvgMarkup(processed);
         const size = svgSize(clean);
         const root = new DOMParser().parseFromString(clean, "image/svg+xml").documentElement;
@@ -2838,18 +4326,24 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
             reason: root.getAttribute("data-gptm-routing-reason") || ""
           }
         };
+      }, {
+        signal: config.signal,
+        timeoutMs,
+        timeoutMessage: "gpt-mermaid: render timed out"
       });
-      renderChain = task.then(() => void 0, () => void 0);
-      return task;
     }
-    function load(config) {
-      return runtime(config);
+    function load(config = {}) {
+      return runtime(config, config.signal);
     }
     return { renderSvg, load, postProcessSvg };
   }
 
   // src/ui.js
   var NS3 = "http://www.w3.org/2000/svg";
+  var SCROLL_LOCK_CLASS = "mgpt-scroll-locked";
+  var MENU_ITEM_SELECTOR = '[role="menuitem"]:not(:disabled)';
+  var INLINE_STAGE_MAX_HEIGHT = 720;
+  var INLINE_STAGE_MIN_HEIGHT = 112;
   var ICONS = {
     menu: [
       ["circle", { cx: "5", cy: "12", r: "1.25", fill: "currentColor", stroke: "none" }],
@@ -2929,7 +4423,10 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
   function setLabel(el, text) {
     const span = el?.querySelector?.(".mgpt-action-label");
     if (span) span.textContent = text;
-    else if (!el?.querySelector?.(".mgpt-icon")) el.textContent = text;
+    else if (el?.querySelector?.(".mgpt-icon")) {
+      el.setAttribute("aria-label", text);
+      el.title = text;
+    } else if (el) el.textContent = text;
   }
   function downloadBlob(blob, filename) {
     const url = URL.createObjectURL(blob);
@@ -2965,7 +4462,13 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     function uiState(doc) {
       let state = states.get(doc);
       if (!state) {
-        state = { records: /* @__PURE__ */ new Set(), viewer: null, outside: null };
+        state = {
+          records: /* @__PURE__ */ new Set(),
+          viewer: null,
+          outside: null,
+          pendingWaits: /* @__PURE__ */ new Map(),
+          disconnectObserver: null
+        };
         state.outside = (event) => {
           if (!event.target.closest?.("[data-gpt-mermaid]")) closeMenus(state);
         };
@@ -2974,16 +4477,70 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       }
       return state;
     }
+    function menuItems(record) {
+      return [...record.menu.querySelectorAll(MENU_ITEM_SELECTOR)];
+    }
+    function setMenuExpanded(record, open) {
+      record.menu.hidden = !open;
+      record.figure.dataset.menuOpen = String(open);
+      record.menuButton?.setAttribute("aria-expanded", String(open));
+    }
+    function openMenu(state, record, position = "first") {
+      closeMenus(state, record);
+      setMenuExpanded(record, true);
+      const items = menuItems(record);
+      (position === "last" ? items.at(-1) : items[0])?.focus();
+    }
+    function closeMenu(record, restoreFocus = false) {
+      if (!record?.menu) return;
+      setMenuExpanded(record, false);
+      if (restoreFocus) record.menuButton?.focus();
+    }
     function closeMenus(state, except = null) {
       for (const record of state.records) {
         if (record === except || !record.menu) continue;
-        record.menu.hidden = true;
-        record.figure.dataset.menuOpen = "false";
-        record.menuButton?.setAttribute("aria-expanded", "false");
+        setMenuExpanded(record, false);
       }
+    }
+    function handleMenuKeydown(record, event) {
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeMenu(record, true);
+        return;
+      }
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+      const items = menuItems(record);
+      if (!items.length) return;
+      const current = items.indexOf(record.figure.ownerDocument.activeElement);
+      let next = 0;
+      if (event.key === "End") next = items.length - 1;
+      else if (event.key === "ArrowDown") next = current < 0 ? 0 : (current + 1) % items.length;
+      else if (event.key === "ArrowUp") next = current < 0 ? items.length - 1 : (current - 1 + items.length) % items.length;
+      event.preventDefault();
+      items[next].focus();
+    }
+    function handleMenuButtonKeydown(record, event) {
+      if (!["ArrowDown", "ArrowUp"].includes(event.key)) return;
+      event.preventDefault();
+      openMenu(record.state, record, event.key === "ArrowUp" ? "last" : "first");
+    }
+    function showNotice(record, message, kind = "info") {
+      record.status.hidden = false;
+      record.status.dataset.kind = kind;
+      record.figure.dataset.notice = kind;
+      record.status.setAttribute("role", kind === "error" ? "alert" : "status");
+      record.status.setAttribute("aria-live", kind === "error" ? "assertive" : "polite");
+      record.status.textContent = message;
     }
     function setStatus(record, status, message) {
       record.figure.dataset.state = status;
+      if (status === "error") record.figure.dataset.notice = "error";
+      else delete record.figure.dataset.notice;
+      record.status.dataset.kind = status;
+      record.status.setAttribute("role", status === "error" ? "alert" : "status");
+      record.status.setAttribute("aria-live", status === "error" ? "assertive" : "polite");
       record.status.textContent = message;
       record.status.hidden = status === "ready";
       record.retry.hidden = status !== "error";
@@ -2991,51 +4548,150 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         const el = record.buttons[action];
         if (el) el.disabled = status !== "ready";
       }
+      if (status === "ready" || status === "error") settleRecord(record, status);
+    }
+    function settleRecord(record, outcome) {
+      const waiters = [...record.waiters];
+      record.waiters.clear();
+      for (const waiter of waiters) waiter(outcome);
+    }
+    function watchDisconnect(record, waiter) {
+      const state = record.state;
+      state.pendingWaits.set(record, waiter);
+      if (state.disconnectObserver || !record.figure.ownerDocument.documentElement) return;
+      state.disconnectObserver = new MutationObserver(() => {
+        for (const [pending, finish] of [...state.pendingWaits]) {
+          if (!pending.figure.isConnected) {
+            if (typeof pending.destroy === "function") pending.destroy();
+            else finish("disconnected");
+          }
+        }
+      });
+      state.disconnectObserver.observe(record.figure.ownerDocument.documentElement, {
+        childList: true,
+        subtree: true
+      });
+    }
+    function unwatchDisconnect(record, waiter) {
+      const state = record.state;
+      if (state.pendingWaits.get(record) === waiter) state.pendingWaits.delete(record);
+      if (!state.pendingWaits.size) {
+        state.disconnectObserver?.disconnect();
+        state.disconnectObserver = null;
+      }
     }
     function zoom(record, value, reset = false, anchor = null) {
       if (!record.result) return;
-      const previous = record.zoom || 1;
-      const next = Math.min(8, Math.max(0.25, value));
+      const inDialog = Boolean(record.state.viewer?.dialog?.open && record.state.viewer.dialog.contains(record.stage));
+      if (inDialog) record.stage.style.height = "100%";
       const box = record.stage.getBoundingClientRect();
-      if (reset) record.panX = record.panY = 0;
-      else if (anchor) {
+      if (record.motion?.resize(box)) {
+        anchor = null;
+        value = record.zoom;
+      }
+      const previous = anchor?.fromZoom ?? record.zoom ?? 1;
+      const next = Math.min(8, Math.max(0.25, value));
+      if (reset) {
+        record.motion?.reset();
+        record.panX = record.panY = 0;
+        if (!inDialog) record.stage.scrollTop = 0;
+      } else if (anchor) {
         const x = anchor.x - box.left - box.width / 2;
         const y = anchor.y - box.top - box.height / 2;
-        record.panX = x - (x - (record.panX || 0)) * next / previous;
-        record.panY = y - (y - (record.panY || 0)) * next / previous;
+        record.panX = x - (x - (anchor.fromPanX ?? record.panX ?? 0)) * next / previous;
+        record.panY = y - (y - (anchor.fromPanY ?? record.panY ?? 0)) * next / previous;
+        record.panX += (anchor.toX ?? anchor.x) - anchor.x;
+        record.panY += (anchor.toY ?? anchor.y) - anchor.y;
       }
       record.zoom = next;
-      const inDialog = Boolean(record.state.viewer?.dialog?.open && record.state.viewer.dialog.contains(record.stage));
       const available = Math.max(1, record.stage.clientWidth || box.width || record.result.width);
-      const maxHeight = inDialog ? Math.max(240, box.height || 760) : record.config.fitMaxHeight;
+      const maxHeight = inDialog ? Math.max(1, box.height) : record.config.fitMaxHeight;
       const fitted = Math.min(1, available / record.result.width, maxHeight / record.result.height);
       const width = record.result.width * fitted;
       const height = record.result.height * fitted;
-      const stageHeight = inDialog ? Math.max(240, box.height || height) : Math.max(112, height);
-      record.stage.style.height = `${stageHeight}px`;
+      const naturalStageHeight = Math.max(INLINE_STAGE_MIN_HEIGHT, height);
+      const viewport = record.stage.ownerDocument.defaultView;
+      const inlineCap = Math.max(240, Math.min(INLINE_STAGE_MAX_HEIGHT, (viewport?.innerHeight || 900) * 0.8));
+      const scrollable = !inDialog && !Number.isFinite(maxHeight) && naturalStageHeight > inlineCap;
+      const stageHeight = inDialog ? Math.max(1, box.height) : Math.min(naturalStageHeight, scrollable ? inlineCap : Infinity);
+      record.stage.style.height = inDialog ? "100%" : `${stageHeight}px`;
       record.image.style.width = `${width}px`;
       record.image.style.height = `${height}px`;
+      if (scrollable) {
+        record.stage.style.overflowY = "auto";
+        record.stage.style.overflowX = "hidden";
+        record.stage.dataset.scrollable = "true";
+        record.image.style.position = "relative";
+        record.image.style.left = "0";
+        record.image.style.top = "0";
+        record.image.style.margin = "0 auto";
+        record.image.style.transformOrigin = "top center";
+      } else {
+        record.stage.style.removeProperty("overflow-y");
+        record.stage.style.removeProperty("overflow-x");
+        delete record.stage.dataset.scrollable;
+        for (const property of ["position", "left", "top", "margin", "transform-origin"]) {
+          record.image.style.removeProperty(property);
+        }
+      }
       const capX = (width * next + available) / 2 - 24;
-      const capY = (height * next + stageHeight) / 2 - 24;
+      const capY = scrollable ? Math.max(0, (height * next - stageHeight) / 2) : (height * next + stageHeight) / 2 - 24;
       record.panX = Math.min(capX, Math.max(-capX, record.panX || 0));
       record.panY = Math.min(capY, Math.max(-capY, record.panY || 0));
-      record.image.style.transform = `translate(calc(-50% + ${record.panX}px), calc(-50% + ${record.panY}px)) scale(${next})`;
+      record.image.style.transform = scrollable ? `translate(${record.panX}px, ${record.panY}px) scale(${next})` : `translate(calc(-50% + ${record.panX}px), calc(-50% + ${record.panY}px)) scale(${next})`;
       record.stage.dataset.zoom = String(next);
       record.stage.dataset.panX = String(record.panX);
       record.stage.dataset.panY = String(record.panY);
-      setLabel(record.buttons.fit, next === 1 ? "\u590D\u4F4D" : `${Math.round(next * 100)}%`);
+      const percent = Math.round(next * 100);
+      const zoomMessage = `\u7F29\u653E ${percent}%${next === 1 ? "\uFF0C\u9002\u5E94\u7A97\u53E3" : ""}`;
+      setLabel(record.buttons.fit, next === 1 ? "\u590D\u4F4D" : `${percent}%`);
+      if (record.state.viewer?.record === record) {
+        const viewer2 = record.state.viewer;
+        if (viewer2.zoomStatus && viewer2.zoomStatus.textContent !== zoomMessage) viewer2.zoomStatus.textContent = zoomMessage;
+        setLabel(viewer2.fitButton, next === 1 ? "\u9002\u5E94\u7A97\u53E3\uFF0C\u5F53\u524D 100%" : `\u9002\u5E94\u7A97\u53E3\uFF0C\u5F53\u524D ${percent}%`);
+      }
       if (!inDialog) {
         if (record.result.width > record.config.maxInlineWidth) record.figure.dataset.wide = "true";
         else delete record.figure.dataset.wide;
       }
     }
     function bindMotion(record) {
-      let pointer = null;
+      const pointers = /* @__PURE__ */ new Map();
+      let gesture = null;
+      const doc = record.stage.ownerDocument;
+      const inViewer = () => record.state.viewer?.dialog?.open && record.state.viewer.viewport.contains(record.stage);
+      const release = (id) => {
+        if (record.stage.hasPointerCapture?.(id)) record.stage.releasePointerCapture(id);
+      };
+      const rebase = () => {
+        const active = [...pointers.entries()].slice(0, 2);
+        gesture = active.length ? {
+          ids: active.map(([id]) => id),
+          x: active.reduce((sum, [, p]) => sum + p.x, 0) / active.length,
+          y: active.reduce((sum, [, p]) => sum + p.y, 0) / active.length,
+          distance: active.length === 2 ? Math.hypot(active[1][1].x - active[0][1].x, active[1][1].y - active[0][1].y) : 0,
+          fromZoom: record.zoom,
+          fromPanX: record.panX || 0,
+          fromPanY: record.panY || 0,
+          box: record.stage.getBoundingClientRect()
+        } : null;
+      };
       record.motion = {
+        resize(box) {
+          if (!gesture || ["left", "top", "width", "height"].every((key) => Math.abs(box[key] - gesture.box[key]) < 0.5)) return false;
+          record.motion.reset();
+          return true;
+        },
+        reset() {
+          const ids = [...pointers.keys()];
+          pointers.clear();
+          gesture = null;
+          record.stage.dataset.dragging = "false";
+          ids.forEach(release);
+        },
         wheel(event) {
           if (!record.result) return;
-          const inViewer = record.state.viewer?.dialog?.open && record.state.viewer.viewport.contains(record.stage);
-          if (!inViewer && !event.ctrlKey) return;
+          if (!inViewer() && !event.ctrlKey) return;
           event.preventDefault();
           const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? record.stage.clientHeight : 1;
           const delta2 = Math.min(600, Math.max(-600, event.deltaY * unit));
@@ -3043,22 +4699,39 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         },
         down(event) {
           if (event.button !== 0 || !record.result) return;
+          if (event.pointerType === "touch" && !inViewer()) return;
+          const first = pointers.values().next().value;
+          if (first && first.type !== event.pointerType) return;
           event.preventDefault();
-          pointer = { id: event.pointerId, x: event.clientX, y: event.clientY };
+          pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, type: event.pointerType });
+          if (pointers.size <= 2) rebase();
           record.stage.setPointerCapture?.(event.pointerId);
           record.stage.dataset.dragging = "true";
         },
         move(event) {
-          if (!pointer || pointer.id !== event.pointerId) return;
-          record.panX = (record.panX || 0) + event.clientX - pointer.x;
-          record.panY = (record.panY || 0) + event.clientY - pointer.y;
+          const pointer = pointers.get(event.pointerId);
+          if (!pointer) return;
+          event.preventDefault();
           pointer.x = event.clientX;
           pointer.y = event.clientY;
-          zoom(record, record.zoom);
+          if (!gesture?.ids.includes(event.pointerId)) return;
+          const active = gesture.ids.map((id) => pointers.get(id));
+          const x = active.reduce((sum, p) => sum + p.x, 0) / active.length;
+          const y = active.reduce((sum, p) => sum + p.y, 0) / active.length;
+          const distance2 = active.length === 2 ? Math.hypot(active[1].x - active[0].x, active[1].y - active[0].y) : 0;
+          const ratio = gesture.distance > 1 ? distance2 / gesture.distance : 1;
+          zoom(record, gesture.fromZoom * ratio, false, { ...gesture, toX: x, toY: y });
+          if (gesture && gesture.distance <= 1 && distance2 > 1) rebase();
         },
-        end() {
-          pointer = null;
-          record.stage.dataset.dragging = "false";
+        end(event) {
+          const active = gesture?.ids.includes(event.pointerId);
+          pointers.delete(event.pointerId);
+          if (active) rebase();
+          release(event.pointerId);
+          record.stage.dataset.dragging = String(pointers.size > 0);
+        },
+        visibility() {
+          if (doc.hidden) record.motion.reset();
         },
         key(event) {
           if (event.key === "Home") {
@@ -3079,17 +4752,56 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       record.stage.addEventListener("pointercancel", record.motion.end);
       record.stage.addEventListener("lostpointercapture", record.motion.end);
       record.stage.addEventListener("keydown", record.motion.key);
+      doc.addEventListener("visibilitychange", record.motion.visibility);
+      doc.defaultView?.addEventListener("blur", record.motion.reset);
+      record.motion.destroy = () => {
+        record.motion.reset();
+        doc.removeEventListener("visibilitychange", record.motion.visibility);
+        doc.defaultView?.removeEventListener("blur", record.motion.reset);
+      };
+    }
+    function lockBackgroundScroll(state, doc) {
+      const viewer2 = state.viewer;
+      if (!viewer2 || viewer2.scrollLock) return;
+      const root = doc.documentElement;
+      const body = doc.body;
+      const scrollX = doc.defaultView?.scrollX ?? 0;
+      const scrollY = doc.defaultView?.scrollY ?? 0;
+      const lock = {
+        root,
+        body,
+        scrollX,
+        scrollY,
+        rootHadLock: root.classList.contains(SCROLL_LOCK_CLASS),
+        bodyHadLock: Boolean(body?.classList.contains(SCROLL_LOCK_CLASS))
+      };
+      root.classList.add(SCROLL_LOCK_CLASS);
+      body?.classList.add(SCROLL_LOCK_CLASS);
+      viewer2.scrollLock = lock;
+    }
+    function unlockBackgroundScroll(state) {
+      const viewer2 = state.viewer;
+      const lock = viewer2?.scrollLock;
+      if (!lock) return;
+      if (!lock.rootHadLock) lock.root.classList.remove(SCROLL_LOCK_CLASS);
+      if (lock.body && !lock.bodyHadLock) lock.body.classList.remove(SCROLL_LOCK_CLASS);
+      viewer2.scrollLock = null;
+      const win = lock.root.ownerDocument.defaultView;
+      if (win && (Math.abs(win.scrollX - lock.scrollX) > 0.5 || Math.abs(win.scrollY - lock.scrollY) > 0.5)) {
+        win.scrollTo(lock.scrollX, lock.scrollY);
+      }
     }
     function viewer(state, record) {
       const doc = record.figure.ownerDocument;
       if (!state.viewer) {
         const dialog = doc.createElement("dialog");
         dialog.className = "mgpt-dialog";
-        dialog.setAttribute("aria-label", "Diagram fullscreen viewer");
+        dialog.setAttribute("aria-label", "\u56FE\u8868\u5168\u5C4F\u67E5\u770B\u5668");
         const bar = doc.createElement("div");
         bar.className = "mgpt-dialog-bar";
         const group = doc.createElement("div");
         group.className = "mgpt-dialog-actions";
+        let fitButton = null;
         for (const [action, label, symbol] of [
           ["zoom-out", "\u7F29\u5C0F", "zoom-out"],
           ["fit", "\u9002\u5E94\u7A97\u53E3", "fit"],
@@ -3098,7 +4810,15 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
           const item = button(doc, action, label, symbol, true);
           item.className = "mgpt-icon-button";
           group.append(item);
+          if (action === "fit") fitButton = item;
         }
+        const zoomStatus = doc.createElement("output");
+        zoomStatus.className = "mgpt-zoom-status";
+        zoomStatus.setAttribute("aria-label", "\u5F53\u524D\u7F29\u653E");
+        zoomStatus.setAttribute("aria-live", "polite");
+        zoomStatus.setAttribute("aria-atomic", "true");
+        zoomStatus.textContent = "\u7F29\u653E 100%\uFF0C\u9002\u5E94\u7A97\u53E3";
+        group.insertBefore(zoomStatus, fitButton?.nextSibling ?? null);
         const close = button(doc, "close", "\u5173\u95ED", "close", true);
         close.className = "mgpt-icon-button";
         bar.append(group, close);
@@ -3106,9 +4826,12 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         viewport.className = "mgpt-dialog-viewport";
         dialog.append(bar, viewport);
         doc.body.append(dialog);
-        state.viewer = { dialog, viewport, record: null };
+        state.viewer = { dialog, viewport, record: null, fitButton, zoomStatus, scrollLock: null };
         dialog.addEventListener("close", () => {
-          if (!dialog.open) closeViewer(state, false);
+          if (!dialog.open) {
+            closeViewer(state, false);
+            unlockBackgroundScroll(state);
+          }
         });
         dialog.addEventListener("cancel", (event) => {
           event.preventDefault();
@@ -3122,8 +4845,20 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       if (state.viewer.record && (state.viewer.record !== record || !state.viewer.dialog.open)) closeViewer(state, false);
       state.viewer.record = record;
       state.viewer.viewport.append(record.stage);
-      record.stage.setAttribute("aria-label", "\u6EDA\u8F6E\u7F29\u653E\uFF0C\u62D6\u52A8\u5E73\u79FB\uFF0CHome \u590D\u4F4D");
-      if (!state.viewer.dialog.open) state.viewer.dialog.showModal();
+      record.stage.setAttribute("aria-label", "\u53CC\u6307\u7F29\u653E\uFF0C\u5355\u6307\u62D6\u52A8\u5E73\u79FB\uFF1B\u9F20\u6807\u6EDA\u8F6E\u7F29\u653E\uFF0CHome \u590D\u4F4D");
+      if (!state.viewer.dialog.open) {
+        lockBackgroundScroll(state, doc);
+        try {
+          state.viewer.dialog.showModal();
+        } catch (error) {
+          unlockBackgroundScroll(state);
+          state.viewer.record = null;
+          record.viewport.append(record.stage);
+          record.stage.setAttribute("aria-label", "\u89E6\u5C4F\u6ED1\u52A8\u9875\u9762\uFF0C\u70B9\u51FB\u653E\u5927\u540E\u53CC\u6307\u7F29\u653E\uFF1BCtrl + \u6EDA\u8F6E\u7F29\u653E\uFF0C\u9F20\u6807\u62D6\u52A8\u5E73\u79FB");
+          zoom(record, 1, true);
+          throw error;
+        }
+      }
       zoom(record, 1, true);
     }
     function closeViewer(state, closeDialog = true) {
@@ -3133,10 +4868,13 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       current.record = null;
       if (record) {
         record.viewport.append(record.stage);
-        record.stage.setAttribute("aria-label", "Ctrl + \u6EDA\u8F6E\u7F29\u653E\uFF0C\u62D6\u52A8\u5E73\u79FB\uFF0CHome \u590D\u4F4D");
+        record.stage.setAttribute("aria-label", "\u89E6\u5C4F\u6ED1\u52A8\u9875\u9762\uFF0C\u70B9\u51FB\u653E\u5927\u540E\u53CC\u6307\u7F29\u653E\uFF1BCtrl + \u6EDA\u8F6E\u7F29\u653E\uFF0C\u9F20\u6807\u62D6\u52A8\u5E73\u79FB");
         zoom(record, 1, true);
       }
-      if (closeDialog && current.dialog.open) current.dialog.close();
+      if (closeDialog) {
+        if (current.dialog.open) current.dialog.close();
+        unlockBackgroundScroll(state);
+      }
     }
     function handleClick(state, event) {
       const actionEl = event.target.closest?.("[data-mgpt-action]");
@@ -3154,18 +4892,18 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         return;
       }
       if (action === "menu") {
-        const open = record.menu.hidden;
-        closeMenus(state, open ? record : null);
-        record.menu.hidden = !open;
-        record.figure.dataset.menuOpen = open ? "true" : "false";
-        record.menuButton.setAttribute("aria-expanded", open ? "true" : "false");
+        if (record.menu.hidden) openMenu(state, record);
+        else closeMenu(record, true);
         return;
       }
+      const openedMenu = !record.menu.hidden;
       closeMenus(state);
+      if (openedMenu && record.menu.contains(actionEl)) record.menuButton?.focus();
       if (action === "copy") {
         navigator.clipboard.writeText(record.source).then(() => {
           setLabel(actionEl, "\u5DF2\u590D\u5236\u6E90\u7801");
-        }).catch((error) => record.status.textContent = `\u590D\u5236\u6E90\u7801\u5931\u8D25\uFF1A${error.message}`);
+          showNotice(record, "\u6E90\u7801\u5DF2\u590D\u5236", "success");
+        }).catch((error) => showNotice(record, `\u590D\u5236\u6E90\u7801\u5931\u8D25\uFF1A${error?.message || error}`, "error"));
         return;
       }
       if (action === "download" && record.result) {
@@ -3176,7 +4914,8 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         svgToPng(record).then(async (blob) => {
           await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
           setLabel(actionEl, "\u5DF2\u590D\u5236\u56FE\u7247");
-        }).catch((error) => record.status.textContent = `\u590D\u5236\u56FE\u7247\u5931\u8D25\uFF1A${error.message}`);
+          showNotice(record, "\u56FE\u7247\u5DF2\u590D\u5236", "success");
+        }).catch((error) => showNotice(record, `\u590D\u5236\u56FE\u7247\u5931\u8D25\uFF1A${error?.message || error}`, "error"));
         return;
       }
       if (action === "expand") {
@@ -3190,31 +4929,99 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     }
     async function renderRecord(record) {
       if (record.loading || record.figure.dataset.state === "ready") return;
+      record.renderAbort?.abort();
+      const abort = new AbortController();
+      record.renderAbort = abort;
+      const attempt = (record.renderAttempt || 0) + 1;
+      record.renderAttempt = attempt;
       record.loading = true;
       setStatus(record, "loading", "\u6B63\u5728\u6E32\u67D3\u56FE\u8868\u2026");
+      const timeoutMs = positiveTimeout(
+        record.config.renderTimeoutMs ?? record.config.timeoutMs,
+        DEFAULT_RENDER_TIMEOUT_MS
+      );
+      const external = record.config.signal;
+      const forwardAbort = () => abort.abort(external?.reason);
+      if (external?.aborted) forwardAbort();
+      else external?.addEventListener?.("abort", forwardAbort, { once: true });
+      clearTimeout(record.imageTimer);
+      record.imageTimer = 0;
       try {
-        const result = await renderSvg(record.source, record.config);
-        if (!record.figure.isConnected || record.destroyed) return;
+        const result = await renderSvg(record.source, {
+          ...record.config,
+          signal: abort.signal,
+          renderTimeoutMs: timeoutMs
+        });
+        if (attempt !== record.renderAttempt || record.destroyed) {
+          record.loading = false;
+          return;
+        }
+        if (!record.figure.isConnected) {
+          record.loading = false;
+          settleRecord(record, "disconnected");
+          return;
+        }
         if (record.url) URL.revokeObjectURL(record.url);
         record.result = result;
         record.url = URL.createObjectURL(new Blob([result.svg], { type: "image/svg+xml;charset=utf-8" }));
         record.image.onload = () => {
-          if (record.destroyed) return;
+          clearTimeout(record.imageTimer);
+          record.imageTimer = 0;
+          if (attempt !== record.renderAttempt || record.destroyed) {
+            record.loading = false;
+            return;
+          }
           record.loading = false;
           setStatus(record, "ready", "\u56FE\u8868\u5DF2\u6E32\u67D3");
           zoom(record, record.zoom);
         };
         record.image.onerror = () => {
+          clearTimeout(record.imageTimer);
+          record.imageTimer = 0;
+          if (attempt !== record.renderAttempt || record.destroyed) return;
           record.loading = false;
           record.image.hidden = true;
+          record.image.removeAttribute("src");
+          if (record.url) {
+            URL.revokeObjectURL(record.url);
+            record.url = null;
+          }
           setStatus(record, "error", "\u56FE\u7247\u65E0\u6CD5\u663E\u793A\uFF0C\u53EF\u91CD\u8BD5\u6216\u68C0\u67E5\u6E90\u7801\u3002");
         };
         record.image.src = record.url;
         record.image.hidden = false;
+        record.imageTimer = setTimeout(() => {
+          if (attempt !== record.renderAttempt || record.destroyed) return;
+          record.imageTimer = 0;
+          record.loading = false;
+          record.image.hidden = true;
+          record.image.removeAttribute("src");
+          if (record.url) {
+            URL.revokeObjectURL(record.url);
+            record.url = null;
+          }
+          setStatus(record, "error", "\u56FE\u7247\u52A0\u8F7D\u8D85\u65F6\uFF0C\u53EF\u91CD\u8BD5\u6216\u68C0\u67E5\u56FE\u8868\u5C3A\u5BF8\u3002");
+        }, timeoutMs);
       } catch (error) {
+        if (attempt !== record.renderAttempt) return;
         record.loading = false;
+        if (record.destroyed) {
+          settleRecord(record, "destroyed");
+          return;
+        }
+        if (!record.figure.isConnected) {
+          settleRecord(record, "disconnected");
+          return;
+        }
         record.image.hidden = true;
-        setStatus(record, "error", error.message || String(error));
+        if (record.url) {
+          URL.revokeObjectURL(record.url);
+          record.url = null;
+        }
+        const message = error?.name === "TimeoutError" ? "\u6E32\u67D3\u8D85\u65F6\uFF0C\u53EF\u91CD\u8BD5\u6216\u7B80\u5316\u56FE\u8868\u3002" : error?.name === "AbortError" ? "\u6E32\u67D3\u5DF2\u53D6\u6D88\u3002" : error?.message || String(error);
+        setStatus(record, "error", message);
+      } finally {
+        external?.removeEventListener?.("abort", forwardAbort);
       }
     }
     function createRecord(source, sourceElement, options) {
@@ -3225,10 +5032,11 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       figure.className = "mgpt-diagram";
       figure.dataset.gptMermaid = "";
       figure.dataset.state = "pending";
-      figure.setAttribute("aria-label", "Mermaid diagram");
+      figure.setAttribute("aria-label", "Mermaid \u56FE\u8868");
       const toolbar = doc.createElement("div");
       toolbar.className = "mgpt-floatbar";
       toolbar.setAttribute("role", "toolbar");
+      toolbar.setAttribute("aria-label", "\u56FE\u8868\u64CD\u4F5C");
       const menuButton = button(doc, "menu", "\u56FE\u8868\u9009\u9879", "menu", true);
       menuButton.className = "mgpt-icon-button";
       menuButton.setAttribute("aria-haspopup", "menu");
@@ -3251,6 +5059,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         const item = button(doc, action, label, symbol);
         item.className = "mgpt-menuitem";
         item.setAttribute("role", "menuitem");
+        item.tabIndex = -1;
         menu.append(item);
         buttons[action] = item;
       }
@@ -3258,19 +5067,22 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       const status = doc.createElement("div");
       status.className = "mgpt-status";
       status.setAttribute("role", "status");
+      status.setAttribute("aria-live", "polite");
+      status.setAttribute("aria-atomic", "true");
       const retry = button(doc, "retry", "\u91CD\u65B0\u6E32\u67D3");
       retry.className = "mgpt-retry";
       const viewport = doc.createElement("div");
       viewport.className = "mgpt-viewport";
+      viewport.setAttribute("role", "group");
       viewport.tabIndex = 0;
-      viewport.setAttribute("aria-label", "Diagram preview");
+      viewport.setAttribute("aria-label", "\u56FE\u8868\u9884\u89C8");
       const stage = doc.createElement("div");
       stage.className = "mgpt-stage";
       stage.tabIndex = 0;
-      stage.setAttribute("aria-label", "Ctrl + \u6EDA\u8F6E\u7F29\u653E\uFF0C\u62D6\u52A8\u5E73\u79FB\uFF0CHome \u590D\u4F4D");
+      stage.setAttribute("aria-label", "\u89E6\u5C4F\u6ED1\u52A8\u9875\u9762\uFF0C\u70B9\u51FB\u653E\u5927\u540E\u53CC\u6307\u7F29\u653E\uFF1BCtrl + \u6EDA\u8F6E\u7F29\u653E\uFF0C\u9F20\u6807\u62D6\u52A8\u5E73\u79FB");
       const image = doc.createElement("img");
       image.className = "mgpt-image";
-      image.alt = "Mermaid diagram";
+      image.alt = "Mermaid \u56FE\u8868";
       image.draggable = false;
       image.hidden = true;
       stage.append(image);
@@ -3296,24 +5108,41 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         panX: 0,
         panY: 0,
         loading: false,
-        destroyed: false
+        destroyed: false,
+        waiters: /* @__PURE__ */ new Set(),
+        renderAbort: null,
+        renderAttempt: 0,
+        imageTimer: 0
       };
       state.records.add(record);
+      menuButton.addEventListener("keydown", (event) => handleMenuButtonKeydown(record, event));
+      menu.addEventListener("keydown", (event) => handleMenuKeydown(record, event));
       bindMotion(record);
       setStatus(record, "pending", "\u6EDA\u52A8\u5230\u6B64\u5904\u65F6\u663E\u793A\u56FE\u8868\u2026");
       if (window.ResizeObserver) {
         record.resize = new ResizeObserver(() => {
-          if (record.result) zoom(record, record.zoom);
+          if (!record.result || record.destroyed || record.resizeFrame) return;
+          record.resizeFrame = requestAnimationFrame(() => {
+            record.resizeFrame = 0;
+            if (!record.destroyed && record.result) zoom(record, record.zoom);
+          });
         });
         record.resize.observe(stage);
       }
       record.destroy = () => {
         if (record.destroyed) return;
         record.destroyed = true;
+        record.loading = false;
+        record.renderAttempt += 1;
+        record.renderAbort?.abort();
+        clearTimeout(record.imageTimer);
+        record.motion.destroy();
         record.resize?.disconnect();
+        if (record.resizeFrame) cancelAnimationFrame(record.resizeFrame);
         if (state.viewer?.record === record) closeViewer(state);
         if (record.url) URL.revokeObjectURL(record.url);
         state.records.delete(record);
+        settleRecord(record, "destroyed");
         record.figure.remove();
       };
       record.fit = () => zoom(record, 1, true);
@@ -3346,6 +5175,41 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       void renderRecord(record);
       return record;
     }
+    function waitForRecord(record) {
+      const state = record.figure.dataset.state;
+      if (record.destroyed || !record.figure.isConnected || state === "ready" || state === "error") {
+        return Promise.resolve(record);
+      }
+      return new Promise((resolve) => {
+        let settled = false;
+        let timer = 0;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          record.waiters.delete(finish);
+          unwatchDisconnect(record, finish);
+          resolve(record);
+        };
+        record.waiters.add(finish);
+        watchDisconnect(record, finish);
+        if (!record.figure.isConnected) {
+          finish();
+          return;
+        }
+        const timeoutMs = positiveTimeout(
+          record.config.renderTimeoutMs ?? record.config.timeoutMs,
+          DEFAULT_RENDER_TIMEOUT_MS
+        ) + 1e3;
+        timer = setTimeout(() => {
+          if (settled) return;
+          record.renderAbort?.abort(timeoutError("gpt-mermaid: render wait timed out"));
+          record.loading = false;
+          setStatus(record, "error", "\u6E32\u67D3\u8D85\u65F6\uFF0C\u53EF\u91CD\u8BD5\u6216\u7B80\u5316\u56FE\u8868\u3002");
+          finish();
+        }, timeoutMs);
+      });
+    }
     function renderAll(root = document, options = {}) {
       const doc = root.ownerDocument || root;
       const diagrams = [];
@@ -3371,25 +5235,13 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         void renderRecord(record);
         diagrams.push(record);
       }
-      return Promise.all(diagrams.map((record) => new Promise((resolve) => {
-        if (record.result) return resolve(record);
-        const timer = setInterval(() => {
-          if (record.figure.dataset.state === "ready" || record.figure.dataset.state === "error") {
-            clearInterval(timer);
-            resolve(record);
-          }
-        }, 30);
-        if (record.figure.dataset.state === "error") {
-          clearInterval(timer);
-          resolve(record);
-        }
-      })));
+      return Promise.all(diagrams.map(waitForRecord));
     }
     return { mount, renderAll, handleClick, uiState, closeMenus, svgToPng };
   }
 
   // src/styles.css
-  var styles_default = '/* \u804C\u8D23\uFF1Agpt-mermaid \u7684 ChatGPT \u98CE\u683C\u5185\u8054\u56FE\u8868\u6837\u5F0F\u3002 */\n.mgpt-diagram {\n  position: relative;\n  display: block;\n  width: 100%;\n  min-width: 0;\n  max-width: 100%;\n  margin: 18px 0;\n  border: 0;\n  background: transparent;\n  color: #263244;\n  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;\n}\n.mgpt-diagram[data-wide="true"] {\n  width: min(calc(100% + 8rem), 96vw);\n  max-width: 96vw;\n  margin-left: 50%;\n  transform: translateX(-50%);\n}\n.mgpt-floatbar {\n  position: absolute;\n  top: 4px;\n  right: 4px;\n  z-index: 8;\n  display: flex;\n  align-items: center;\n  gap: 2px;\n  padding: 2px;\n  border: 1px solid rgba(26, 28, 31, .06);\n  border-radius: 9999px;\n  background: rgba(255, 255, 255, .94);\n  box-shadow: 0 1px 4px rgba(24, 32, 48, .08);\n  opacity: 0;\n  pointer-events: none;\n  transition: opacity .15s ease;\n}\n.mgpt-diagram:hover .mgpt-floatbar,\n.mgpt-diagram:focus-within .mgpt-floatbar,\n.mgpt-diagram[data-menu-open="true"] .mgpt-floatbar,\n.mgpt-diagram[data-state="error"] .mgpt-floatbar {\n  opacity: 1;\n  pointer-events: auto;\n}\n@media (hover: none), (pointer: coarse) {\n  .mgpt-floatbar { opacity: 1; pointer-events: auto; }\n}\n.mgpt-icon-button {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  width: 32px;\n  height: 32px;\n  padding: 0;\n  border: 0;\n  border-radius: 9999px;\n  background: transparent;\n  color: #626f82;\n  cursor: pointer;\n}\n.mgpt-icon-button:hover:not(:disabled),\n.mgpt-diagram[data-menu-open="true"] .mgpt-floatbar [data-mgpt-action="menu"] {\n  background: #ebf0f7;\n  color: #263244;\n}\n.mgpt-icon-button:focus-visible,\n.mgpt-menuitem:focus-visible {\n  outline: 2px solid #2563c9;\n  outline-offset: 1px;\n}\n.mgpt-icon {\n  width: 16px;\n  height: 16px;\n  flex-shrink: 0;\n}\n.mgpt-menu {\n  position: absolute;\n  top: calc(100% + 6px);\n  right: 0;\n  z-index: 20;\n  display: flex;\n  flex-direction: column;\n  min-width: 148px;\n  padding: 6px;\n  border: 1px solid #e1e7ef;\n  border-radius: 12px;\n  background: #fff;\n  box-shadow: 0 8px 32px #1b2b4212, 0 1px 4px #1b2b4208;\n}\n.mgpt-menu[hidden] { display: none; }\n.mgpt-menuitem {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  width: 100%;\n  padding: 7px 10px;\n  border: 0;\n  border-radius: 8px;\n  background: transparent;\n  color: #263244;\n  font: inherit;\n  font-size: 12.5px;\n  line-height: 1.5;\n  text-align: left;\n  cursor: pointer;\n}\n.mgpt-menuitem:hover:not(:disabled) { background: #f2f5f9; }\n.mgpt-menuitem:disabled,\n.mgpt-icon-button:disabled { opacity: .42; cursor: default; }\n.mgpt-status {\n  padding: 12px 16px;\n  color: #626f82;\n  font-size: 12px;\n  line-height: 1.6;\n}\n.mgpt-diagram[data-state="error"] .mgpt-status { color: #a44c32; }\n.mgpt-retry {\n  margin: 0 16px 12px;\n  padding: 5px 9px;\n  border: 1px solid #e1e7ef;\n  border-radius: 7px;\n  background: #fff;\n  color: #263244;\n  font: inherit;\n  font-size: 12px;\n  cursor: pointer;\n}\n.mgpt-retry[hidden] { display: none; }\n.mgpt-viewport {\n  box-sizing: border-box;\n  width: 100%;\n  min-width: 0;\n  max-width: 100%;\n  padding: 8px 0;\n  overflow: visible;\n  background: transparent;\n}\n.mgpt-stage {\n  position: relative;\n  width: 100%;\n  min-height: 112px;\n  overflow: hidden;\n  cursor: grab;\n  touch-action: pan-y;\n  user-select: none;\n}\n.mgpt-stage[data-dragging="true"] { cursor: grabbing; }\n.mgpt-stage:focus-visible { outline: 2px solid #2563c9; outline-offset: -2px; }\n.mgpt-image {\n  position: absolute;\n  left: 50%;\n  top: 50%;\n  display: block;\n  width: 100%;\n  height: auto;\n  max-width: none;\n  margin: 0;\n  border: 0;\n  object-fit: contain;\n  pointer-events: none;\n  transform-origin: center;\n}\n.mgpt-image[hidden] { display: none; }\n.mgpt-diagram > pre {\n  max-height: 420px;\n  margin: 0;\n  overflow: auto;\n}\n.mgpt-dialog {\n  box-sizing: border-box;\n  width: min(1440px, calc(100vw - 32px));\n  height: min(900px, calc(100dvh - 32px));\n  max-width: none;\n  padding: 0;\n  border: 1px solid #e1e7ef;\n  border-radius: 16px;\n  background: #fff;\n  color: #263244;\n  box-shadow: 0 8px 32px #1b2b4212;\n  overflow: hidden;\n}\n.mgpt-dialog::backdrop { background: #0006; }\n.mgpt-dialog[open] { display: flex; flex-direction: column; }\n.mgpt-dialog-bar {\n  display: flex;\n  align-items: center;\n  flex: 0 0 auto;\n  min-height: 42px;\n  padding: 5px 8px;\n  border-bottom: 1px solid #f1f4f8;\n  background: #fafbfd;\n}\n.mgpt-dialog-actions { display: flex; align-items: center; gap: 2px; }\n.mgpt-dialog-bar > [data-mgpt-action="close"] { margin-left: auto; }\n.mgpt-dialog-viewport { flex: 1; min-height: 0; }\n.mgpt-dialog-viewport .mgpt-stage { height: 100%; min-height: 100%; }\n@media (max-width: 900px) {\n  .mgpt-diagram[data-wide="true"] {\n    width: 100%;\n    max-width: 100%;\n    margin-left: 0;\n    transform: none;\n  }\n}\n@media (max-width: 640px) {\n  .mgpt-diagram { margin: 14px 0; }\n  .mgpt-viewport { padding: 4px 0; }\n  .mgpt-dialog { width: calc(100vw - 12px); height: calc(100dvh - 12px); }\n}\n';
+  var styles_default = '/* \u804C\u8D23\uFF1Agpt-mermaid \u7684 ChatGPT \u98CE\u683C\u5185\u8054\u56FE\u8868\u6837\u5F0F\u3002 */\nhtml.mgpt-scroll-locked,\nbody.mgpt-scroll-locked {\n  overflow: hidden !important;\n  overscroll-behavior: none !important;\n  scrollbar-gutter: stable;\n}\n.mgpt-diagram {\n  position: relative;\n  display: block;\n  width: 100%;\n  min-width: 0;\n  max-width: 100%;\n  margin: 18px 0;\n  border: 0;\n  background: transparent;\n  color: #263244;\n  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;\n}\n.mgpt-diagram[data-wide="true"] {\n  width: min(calc(100% + 8rem), 96vw);\n  max-width: 96vw;\n  margin-left: 50%;\n  transform: translateX(-50%);\n}\n.mgpt-floatbar {\n  position: absolute;\n  top: 4px;\n  right: 4px;\n  z-index: 8;\n  display: flex;\n  align-items: center;\n  gap: 2px;\n  padding: 2px;\n  border: 1px solid rgba(26, 28, 31, .06);\n  border-radius: 9999px;\n  background: rgba(255, 255, 255, .94);\n  box-shadow: 0 1px 4px rgba(24, 32, 48, .08);\n  opacity: 0;\n  pointer-events: none;\n  transition: opacity .15s ease;\n}\n.mgpt-diagram:hover .mgpt-floatbar,\n.mgpt-diagram:focus-within .mgpt-floatbar,\n.mgpt-diagram[data-menu-open="true"] .mgpt-floatbar,\n.mgpt-diagram[data-state="error"] .mgpt-floatbar {\n  opacity: 1;\n  pointer-events: auto;\n}\n@media (hover: none), (pointer: coarse) {\n  .mgpt-floatbar { opacity: 1; pointer-events: auto; }\n}\n.mgpt-icon-button {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  width: 32px;\n  height: 32px;\n  padding: 0;\n  border: 0;\n  border-radius: 9999px;\n  background: transparent;\n  color: #626f82;\n  cursor: pointer;\n}\n.mgpt-icon-button:hover:not(:disabled),\n.mgpt-diagram[data-menu-open="true"] .mgpt-floatbar [data-mgpt-action="menu"] {\n  background: #ebf0f7;\n  color: #263244;\n}\n.mgpt-icon-button:focus-visible,\n.mgpt-menuitem:focus-visible {\n  outline: 2px solid #2563c9;\n  outline-offset: 1px;\n}\n.mgpt-icon {\n  width: 16px;\n  height: 16px;\n  flex-shrink: 0;\n}\n.mgpt-menu {\n  position: absolute;\n  top: calc(100% + 6px);\n  right: 0;\n  z-index: 20;\n  display: flex;\n  flex-direction: column;\n  min-width: 148px;\n  padding: 6px;\n  border: 1px solid #e1e7ef;\n  border-radius: 12px;\n  background: #fff;\n  box-shadow: 0 8px 32px #1b2b4212, 0 1px 4px #1b2b4208;\n}\n.mgpt-menu[hidden] { display: none; }\n.mgpt-menuitem {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  width: 100%;\n  padding: 7px 10px;\n  border: 0;\n  border-radius: 8px;\n  background: transparent;\n  color: #263244;\n  font: inherit;\n  font-size: 12.5px;\n  line-height: 1.5;\n  text-align: left;\n  cursor: pointer;\n}\n.mgpt-menuitem:hover:not(:disabled) { background: #f2f5f9; }\n.mgpt-menuitem:disabled,\n.mgpt-icon-button:disabled { opacity: .42; cursor: default; }\n.mgpt-status {\n  padding: 12px 16px;\n  color: #626f82;\n  font-size: 12px;\n  line-height: 1.6;\n}\n.mgpt-status[data-kind="error"],\n.mgpt-diagram[data-state="error"] .mgpt-status { color: #a44c32; }\n.mgpt-retry {\n  margin: 0 16px 12px;\n  padding: 5px 9px;\n  border: 1px solid #e1e7ef;\n  border-radius: 7px;\n  background: #fff;\n  color: #263244;\n  font: inherit;\n  font-size: 12px;\n  cursor: pointer;\n}\n.mgpt-retry[hidden] { display: none; }\n.mgpt-viewport {\n  box-sizing: border-box;\n  width: 100%;\n  min-width: 0;\n  max-width: 100%;\n  padding: 8px 0;\n  overflow: visible;\n  background: transparent;\n}\n.mgpt-stage {\n  position: relative;\n  width: 100%;\n  min-height: 112px;\n  overflow: hidden;\n  cursor: grab;\n  touch-action: pan-y pinch-zoom;\n  user-select: none;\n}\n.mgpt-stage[data-dragging="true"] { cursor: grabbing; }\n.mgpt-stage:focus-visible { outline: 2px solid #2563c9; outline-offset: -2px; }\n.mgpt-image {\n  position: absolute;\n  left: 50%;\n  top: 50%;\n  display: block;\n  width: 100%;\n  height: auto;\n  max-width: none;\n  margin: 0;\n  border: 0;\n  object-fit: contain;\n  pointer-events: none;\n  transform-origin: center;\n}\n.mgpt-image[hidden] { display: none; }\n.mgpt-diagram > pre {\n  max-height: 420px;\n  margin: 0;\n  overflow: auto;\n}\n.mgpt-dialog {\n  box-sizing: border-box;\n  width: min(1440px, calc(100vw - 32px));\n  height: min(900px, calc(100dvh - 32px));\n  max-width: none;\n  padding: 0;\n  border: 1px solid #e1e7ef;\n  border-radius: 16px;\n  background: #fff;\n  color: #263244;\n  box-shadow: 0 8px 32px #1b2b4212;\n  overflow: hidden;\n  overscroll-behavior: contain;\n}\n.mgpt-dialog::backdrop { background: #0006; }\n.mgpt-dialog[open] { display: flex; flex-direction: column; }\n.mgpt-dialog-bar {\n  display: flex;\n  align-items: center;\n  flex: 0 0 auto;\n  min-height: 42px;\n  padding: 5px 8px;\n  border-bottom: 1px solid #f1f4f8;\n  background: #fafbfd;\n  touch-action: none;\n}\n.mgpt-dialog-actions { display: flex; align-items: center; gap: 2px; }\n.mgpt-dialog-bar > [data-mgpt-action="close"] { margin-left: auto; }\n.mgpt-zoom-status {\n  min-width: 58px;\n  color: #626f82;\n  font: inherit;\n  font-size: 12px;\n  font-variant-numeric: tabular-nums;\n  text-align: center;\n}\n.mgpt-dialog-viewport { flex: 1; min-height: 0; overscroll-behavior: contain; }\n.mgpt-dialog-viewport .mgpt-stage {\n  height: 100%;\n  min-height: 100%;\n  /* \u5168\u5C4F\u624D\u63A5\u7BA1\u89E6\u5C4F\uFF0C\u907F\u514D\u6D4F\u89C8\u5668\u7EB5\u5411\u6EDA\u52A8\u53D6\u6D88\u5355\u6307\u5E73\u79FB/\u53CC\u6307\u7F29\u653E\u3002 */\n  touch-action: none;\n}\n@media (pointer: coarse) {\n  .mgpt-icon-button { width: 44px; height: 44px; }\n  .mgpt-menuitem { min-height: 44px; }\n  .mgpt-retry { min-width: 44px; min-height: 44px; }\n}\n@media (max-width: 900px) {\n  .mgpt-diagram[data-wide="true"] {\n    width: 100%;\n    max-width: 100%;\n    margin-left: 0;\n    transform: none;\n  }\n}\n@media (max-width: 640px) {\n  .mgpt-diagram { margin: 14px 0; }\n  .mgpt-viewport { padding: 4px 0; }\n  .mgpt-dialog { width: calc(100vw - 12px); height: calc(100dvh - 12px); }\n  .mgpt-diagram[data-state="error"] .mgpt-floatbar,\n  .mgpt-diagram[data-notice] .mgpt-floatbar {\n    position: static;\n    width: max-content;\n    margin: 4px 4px 0 auto;\n  }\n}\n';
 
   // src/factory.js
   function injectStyles(doc, enabled) {

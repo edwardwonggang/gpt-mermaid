@@ -11,6 +11,10 @@ import { verifyRenderingGeometry } from "./render-geometry.mjs";
 import { verifyLayoutQuality } from "./layout-quality.mjs";
 import { auditDetailOverlaps } from "./detail-overlaps.mjs";
 import { verifyCrossingQuality } from "./crossing-quality.mjs";
+import { auditArrowContacts } from "./arrow-contacts.mjs";
+import { verifyPracticalVariants } from "./practical-variants.mjs";
+import { verifyTouchGestures } from "./touch-gestures.mjs";
+import { BASE_GEOMETRY_EXPECTATIONS } from "./geometry-expectations.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 4173;
@@ -36,7 +40,7 @@ async function waitServer() {
 const browser = await chromium.launch({ headless: true });
 try {
   await waitServer();
-  const context = await browser.newContext({ viewport: { width: 1360, height: 1000 }, permissions: ["clipboard-read", "clipboard-write"] });
+  const context = await browser.newContext({ viewport: { width: 1360, height: 1000 }, hasTouch: true, permissions: ["clipboard-read", "clipboard-write"] });
   const page = await context.newPage();
   const errors = [];
   const external = [];
@@ -328,37 +332,64 @@ try {
   assert.equal(stress.ready, 100);
   assert(stress.families >= 22);
   assert.deepEqual(stress.unexpected, []);
-  const horizontalChain = stress.dimensions.find((item) => item.id === "stress-flow-lr-extreme-chain");
-  const verticalChain = stress.dimensions.find((item) => item.id === "stress-flow-td-long-chain");
-  assert(horizontalChain.width < 1250 && horizontalChain.height < 1000);
-  assert(verticalChain.width < 1200 && verticalChain.height < 1050);
-  const rawSizes = await page.evaluate(async () => {
-    const ids = ["stress-flow-lr-extreme-chain", "stress-flow-td-long-chain"];
-    const results = [];
-    for (const id of ids) {
-      const source = GPT_MERMAID_LAB_CASES.find((item) => item.id === id).source;
-      const result = await GPTMermaid.renderSvg(source, { adaptiveLayout: false });
-      results.push({ width: result.width, height: result.height });
-    }
-    return results;
+  const practical = await page.evaluate(async () => {
+    const ids = ["stress-flow-lr-extreme-chain", "stress-flow-td-long-chain", "stress-flow-lr-dense"];
+    const samples = ids.map(id => {
+      const record = [...GPTMermaid.ui.uiState(document).records].find(r => r.figure.closest(".sample").dataset.sampleId === id);
+      const svg = new DOMParser().parseFromString(record.result.svg, "image/svg+xml");
+      return { id, nodes: svg.querySelectorAll("g.node").length, edges: svg.querySelectorAll(".flowchart-link").length };
+    });
+    const foldSource = `flowchart LR
+Receive[Receive order] --> Validate[Validate items] --> Reserve[Reserve stock] --> Charge[Authorize payment]
+Charge --> Pack[Pack order] --> Ship[Ship parcel] --> Deliver[Confirm delivery] --> Close[Close order]`;
+    const adaptive = await GPTMermaid.renderSvg(foldSource, {
+      adaptiveLayout: { maxWidth: 600, maxHeight: 600, gap: 80 },
+    });
+    const original = await GPTMermaid.renderSvg(foldSource, { adaptiveLayout: false });
+    const adaptiveSvg = new DOMParser().parseFromString(adaptive.svg, "image/svg+xml");
+    return {
+      samples,
+      fold: {
+        adaptive: { width: adaptive.width, height: adaptive.height, state: adaptiveSvg.documentElement.dataset.gptmAdaptive },
+        original: { width: original.width, height: original.height },
+      },
+    };
   });
-  assert(rawSizes[0].width > 6000 && rawSizes[1].height > 3000, "原布局对照丢失极端长宽输入");
+  for (const item of practical.samples) {
+    assert(item.nodes >= 8 && item.nodes <= 18, `${item.id} 应为实用规模`);
+    assert(item.edges >= item.nodes, `${item.id} 应覆盖分支/反馈，不能退化为纯串行`);
+  }
+  assert.equal(practical.fold.adaptive.state, "applied", "8步订单链必须实际应用自适应折返");
+  assert(practical.fold.adaptive.width <= 600, `自适应宽度应受600阈值约束：${JSON.stringify(practical.fold)}`);
+  assert(practical.fold.original.width > practical.fold.adaptive.width * 1.25,
+    `原始布局应有明显横向对照：${JSON.stringify(practical.fold)}`);
+  assert(practical.fold.original.height < practical.fold.adaptive.height,
+    `折返后应增加纵向高度：${JSON.stringify(practical.fold)}`);
   await verifyLayoutQuality(page, path.join(output, "playwright", "layout-after"));
-  const details = await auditDetailOverlaps(page, path.join(output, "playwright", "detail-audit"));
+  const details = await auditDetailOverlaps(page, path.join(output, "playwright", "detail-audit"), true, BASE_GEOMETRY_EXPECTATIONS);
   const crossingReport = await verifyCrossingQuality(page, path.join(output, "playwright", "route-quality"));
+  const contacts = await auditArrowContacts(page, path.join(output, "playwright", "arrow-detail"), true, BASE_GEOMETRY_EXPECTATIONS);
+  console.log(`箭头接触验收：${contacts.length} 图，三角完整可见、线杆连接与所属轮廓断言通过`);
+  const variants = await verifyPracticalVariants(page, path.join(output, "playwright", "practical-variants"));
+  console.log(`独立实用变体验收：${variants.length} 张方向/字体/名称组合通过`);
   console.log(`交叉验收：${crossingReport.verified.length} 个图种/方向变体独立采样通过，复杂图库残留按实际报告`);
+  assert.equal(contacts.length, 100, "箭头接触验收必须实际覆盖100张基准图");
+  assert.equal(variants.length, 15, "实用变体必须实际覆盖15张独立图");
+  assert.equal(crossingReport.verified.length, 9, "交叉独立采样必须实际覆盖9个图种/方向变体");
   assert.equal(details.length, 100);
   console.log(`细节验收：${details.length} 图，${details.reduce((sum, item) => sum + item.triangles, 0)} 个三角箭头，箭头/线杆/胶囊互遮断言通过`);
   await fs.writeFile(path.join(output, "playwright", "stress-report.json"), JSON.stringify(stress, null, 2));
   await page.locator("#family").selectOption("sequenceDiagram");
   assert((await page.locator(".sample:visible").count()) >= 10);
   await page.locator("#reset").click();
-  await page.locator("#search").fill("超宽");
-  assert((await page.locator(".sample:visible").count()) >= 8);
+  await page.locator("#search").fill("Webhook");
+  assert.equal(await page.locator(".sample:visible").count(), 1);
   await page.locator("#reset").click();
   await page.screenshot({ path: path.join(output, "playwright", "stress-lab.png") });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
+  const touch = await verifyTouchGestures(page, { mode: "cdp", output: path.join(output, "playwright", "touch") });
+  console.log(`触屏验收：${touch.checks.length}项浏览器原生触摸输入检查，包含双指缩放、手指切换与行内真实滚动`);
   assert.deepEqual(errors, []);
   assert.deepEqual(external, []);
   console.log("gpt-mermaid E2E passed");

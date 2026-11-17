@@ -73,6 +73,24 @@ function inkAt(position, pattern, offset, scale) {
   return false;
 }
 
+function polylineGeometry(points) {
+  const lengths = points.slice(1).map((point, index) =>
+    Math.hypot(point.x - points[index].x, point.y - points[index].y));
+  return {
+    length: lengths.reduce((sum, length) => sum + length, 0),
+    pointAt(distance) {
+      let remaining = distance;
+      for (let index = 0; index < lengths.length; index++) {
+        if (remaining <= lengths[index] || index === lengths.length - 1) {
+          const fraction = remaining / lengths[index], a = points[index], b = points[index + 1];
+          return { x: a.x + (b.x - a.x) * fraction, y: a.y + (b.y - a.y) * fraction };
+        }
+        remaining -= lengths[index];
+      }
+    },
+  };
+}
+
 test("没有独立marker的共享汇入线杆仍在主箭头底部截止", (t) => {
   installStyleReader(t);
   const leader = fixture({ head: false }), follower = fixture({ head: false, tail: false });
@@ -91,7 +109,7 @@ test("没有独立marker的共享汇入线杆仍在主箭头底部截止", (t) =
   }
 });
 
-test("裁线保留虚线相位、pathLength与百分比标尺，且重复执行幂等", (t) => {
+test("裁线保留主体虚线相位并补齐三角接头，兼容pathLength、百分比及幂等", (t) => {
   installStyleReader(t);
   let assertions = 0;
   let combinations = 0;
@@ -107,8 +125,8 @@ test("裁线保留虚线相位、pathLength与百分比标尺，且重复执行�
           for (let index = 0; index < 97; index++) {
             // 非整点样本避开恰好落在 dash 边界时的浮点舍入歧义。
             const x = (index + 0.314159) * 50 / 97;
-            const expected = x >= (head ? 11 : 0) && x < 50 - (tail ? 11 : 0)
-              && inkAt(x, pattern, offset, scale);
+            const expected = x >= (head ? 10.6 : 0) && x < 50 - (tail ? 10.6 : 0)
+              && (inkAt(x, pattern, offset, scale) || head && x < 13.6 || tail && x >= 36.4);
             assert.equal(inkAt(x, encoded, "0", scale), expected,
               JSON.stringify({ pattern, offset, calibration, head, tail, x, encoded }));
             assertions++;
@@ -128,12 +146,55 @@ test("裁线保留虚线相位、pathLength与百分比标尺，且重复执行�
   t.diagnostic(`${combinations} 组组合，${assertions} 个着墨位置断言`);
 });
 
+test("短曲线按实际三角交界裁剪，不能把三角深度当弧长造成断开", (t) => {
+  installStyleReader(t);
+  const item = fixture({ head: false, tail: true, length: 30 });
+  item.edge.getPointAtLength = (offset) => {
+    const distance = 30 - offset;
+    return { x: 10 * Math.sin(distance / 10), y: 10 * (1 - Math.cos(distance / 10)) };
+  };
+  trimArrowShafts(item.svg);
+  const dash = item.css.get("stroke-dasharray").value;
+  // 独立解析：圆弧与边斜率0.4的交界为2*atan(0.4)*R，约7.61；
+  // 原固定11裁法会在真正接头前空出3.39单位。
+  assert(inkAt(30 - 8, dash, "0", 1), "箭头外的曲线必须可见");
+  assert(!inkAt(30 - 7, dash, "0", 1), "三角内的线杆必须裁去");
+});
+
+test("整条折线仍在三角内部时不能退回深度裁剪而重新露出线杆", (t) => {
+  installStyleReader(t);
+  const insidePoints = [
+    { x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 1.5 },
+    { x: 8, y: 1.5 }, { x: 8, y: -1.5 }, { x: 10, y: -1.5 },
+  ];
+  // 凸三角包含每个折点即包含整条折线；弧长14.5大于marker深度11。
+  assert(insidePoints.every(({ x, y }) => x >= 0 && x <= 11 && Math.abs(y) <= x * 0.4));
+  for (const start of [true, false]) {
+    const points = start ? insidePoints : insidePoints.slice().reverse(), geometry = polylineGeometry(points);
+    assert.equal(geometry.length, 14.5);
+    const item = fixture({
+      head: start, tail: !start, length: geometry.length,
+      d: points.map((point, index) => `${index ? "L" : "M"}${point.x},${point.y}`).join(""),
+    });
+    item.edge.getPointAtLength = geometry.pointAt;
+    assert.deepEqual(trimArrowShafts(item.svg), { trimmed: 1, skipped: [] });
+    const encoded = item.css.get("stroke-dasharray").value;
+    for (let offset = 0.1; offset < geometry.length; offset += 0.2) {
+      assert(!inkAt(offset, encoded, "0", 1),
+        `${start ? "起点" : "终点"}三角内部仍有可见线杆：offset=${offset},dash=${encoded}`);
+    }
+    trimArrowShafts(item.svg);
+    assert.equal(item.css.get("stroke-dasharray").value, encoded, "完全覆盖场景重复裁剪也必须幂等");
+    assert.deepEqual(Object.fromEntries(item.attributes), item.originalAttributes);
+  }
+});
+
 test("直线与折线沿原几何裁线，不改变原属性", (t) => {
   installStyleReader(t);
   for (const kind of ["line", "polyline"]) {
     const item = fixture({ kind, head: false });
     assert.deepEqual(trimArrowShafts(item.svg), { trimmed: 1, skipped: [] });
-    assert.equal(item.css.get("stroke-dasharray").value, "0 0 39 51");
+    assert.equal(item.css.get("stroke-dasharray").value, "0 0 39.4 51");
     assert.deepEqual(Object.fromEntries(item.attributes), item.originalAttributes);
   }
 });
@@ -167,4 +228,27 @@ test("无法可靠计算的线型显式报告，保留原样而非猜测", (t) =
   broken.edge.getTotalLength = () => { throw new Error("unavailable"); };
   assert.equal(trimArrowShafts(broken.svg).skipped[0].reason, "geometry-unavailable");
   assert.equal(broken.css.size, 0);
+});
+
+test("长度可读但实际路径取点失败时逐边跳过，不能中断其余箭杆处理", (t) => {
+  installStyleReader(t);
+  const failures = [
+    () => { throw new Error("point measurement unavailable"); },
+    () => ({ x: NaN, y: 0 }),
+    () => ({ x: 0, y: Infinity }),
+  ];
+  for (const failure of failures) for (const failAfter of [0, 0.1]) {
+    const broken = fixture({ head: true, tail: false }), healthy = fixture({ head: false, tail: true });
+    healthy.edge.id = "healthy";
+    broken.edge.getPointAtLength = (distance) => {
+      if (distance >= failAfter) return failure();
+      return { x: distance, y: 0 };
+    };
+    broken.svg.querySelectorAll = () => [broken.edge, healthy.edge];
+    const report = trimArrowShafts(broken.svg);
+    assert.deepEqual(report, { trimmed: 1, skipped: [{ id: "edge-test", reason: "geometry-unavailable" }] });
+    assert.equal(broken.css.size, 0, "取点失败时不应留下部分裁剪样式");
+    assert.deepEqual(Object.fromEntries(broken.attributes), broken.originalAttributes);
+    assert(healthy.css.has("stroke-dasharray"), "其它合法边仍应继续处理");
+  }
 });

@@ -2,8 +2,9 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { assertBaseGeometryCounts } from "./geometry-expectations.mjs";
 
-export async function auditDetailOverlaps(page, output, enforce = true) {
+export async function auditDetailOverlaps(page, output, enforce = true, expectations = null) {
   const report = await page.evaluate(() => {
     const records = [...GPTMermaid.ui.uiState(document).records].filter((r) => r.result);
     const results = [];
@@ -108,8 +109,11 @@ export async function auditDetailOverlaps(page, output, enforce = true) {
   });
   await fs.mkdir(output, { recursive: true });
   await fs.writeFile(path.join(output, "detail-overlaps.json"), JSON.stringify(report, null, 2));
-  if (enforce) for (const item of report) for (const kind of ["arrows", "shafts", "labels", "foreignLabels"]) {
-    assert.equal(item[kind].length, 0, `${item.id} ${kind}: ${JSON.stringify(item[kind])}`);
+  if (enforce) {
+    for (const item of report) for (const kind of ["arrows", "shafts", "labels", "foreignLabels"]) {
+      assert.equal(item[kind].length, 0, `${item.id} ${kind}: ${JSON.stringify(item[kind])}`);
+    }
+    if (expectations) assertBaseGeometryCounts(report, "细节交叠验收");
   }
   return report;
 }

@@ -1,7 +1,8 @@
 /* 职责：提供可搜索的确定性压力样例；调用方：compatibility.html。
  * 依赖：经典 script 环境的 window；不依赖运行时、不操作 DOM。
- * 红线：只提供数据，不能改变渲染配置或旧样例；每个 ID 必须稳定且唯一。
- * 大图通过确定性循环生成，尺寸标签指结构意图，实际尺寸由渲染器决定。
+ * 红线：只提供数据，不能改变渲染配置；每个 ID 必须稳定且唯一。
+ * 业务例保留旧 ID 供筛选与回归引用；替换拓扑时同步审查依赖该结构的断言。
+ * 节点规模服务于可读的业务场景，不用重复长链或完全连接制造无意义压力。
  */
 (function () {
   "use strict";
@@ -33,32 +34,58 @@
       [direction, horizontal ? "横向" : "纵向", ...tags], horizontal || complexity === "压力");
   };
 
-  // 每种结构只保留一个代表；长链分别覆盖纵向换列与横向换行两个几何边界。
-  // RL 用多端点链、BT 用连续分支组覆盖反向语义，不再把全部样例乘四。
+  // 业务例按拓扑职责区分：补偿、并行、事件汇聚、跨层、回边和多组件。
+  // 轮廓、端点与既有故障夹具独立保留，不因替换业务例而丢失回归证据。
   flow("TD", "single", "单节点长标题", "简单", ['A["单个节点也应保持标题居中"]'], ["单节点", "1节点"]);
   flow("LR", "isolated", "六种孤立形状", "简单",
     shapes.slice(0, 6).map((shape, i) => shape(`I${i}`, `孤立 ${i + 1}`)), ["孤立", "6节点"]);
-  flow("TD", "long-chain", "四十节点纵向长链与边标签", "压力", [
-    ...range(40).map((i) => `N${i}["步骤 ${i + 1}"]`),
-    ...range(39).map((i) => `N${i} -->|交接 ${i + 1}| N${i + 1}`),
-  ], ["链", "40节点", "超长", "折返", "换列", "边标签"]);
-  flow("LR", "extreme-chain", "六十节点横向极长链", "压力",
-    chain(60, (i) => `节点 ${String(i + 1).padStart(2, "0")}`),
-    ["链", "60节点", "超宽", "折返", "换行"]);
-  flow("LR", "fan-out", "十八路扇出再汇总", "复杂", [
-    'S(["任务入口"])', 'T(["任务汇总"])',
-    ...range(18).flatMap((i) => [`S --> B${i}["并发分支 ${i + 1}"]`, `B${i} --> T`]),
-  ], ["扇出", "扇入", "20节点"]);
-  flow("TD", "fan-in", "十八路来源与双出口", "复杂", [
-    'D{"统一判定"}', 'Y["接收"]', 'N["退回"]',
-    ...range(18).map((i) => `S${i}["来源 ${i + 1}"] --> D`),
-    'D -->|通过| Y', 'D -. 复核 .-> N',
-  ], ["扇入", "判断", "21节点"]);
-  flow("LR", "dense", "三层完全交叉连接", "压力", [
-    ...range(3).flatMap((layer) => range(6).map((i) => `L${layer}N${i}["第 ${layer + 1} 层 · ${i + 1}"]`)),
-    ...range(2).flatMap((layer) => range(6).flatMap((from) =>
-      range(6).map((to) => `L${layer}N${from} --> L${layer + 1}N${to}`))),
-  ], ["密集交叉", "18节点", "72边"]);
+  flow("TD", "long-chain", "下单履约与支付失败补偿", "复杂", [
+    'START["提交订单"] --> AUTH{"登录态有效？"}',
+    'AUTH -->|否| LOGIN["登录后恢复订单"]', 'LOGIN --> AUTH',
+    'AUTH -->|是| DEDUPE{"已有幂等订单？"}',
+    'DEDUPE -->|是| EXIST["读取原订单"]', 'EXIST --> NOTICE["通知用户"]',
+    'DEDUPE -->|否| STOCK["预占库存"]', 'STOCK --> PAY["发起支付"]',
+    'PAY --> RESULT{"支付结果"}',
+    'RESULT -->|成功| FULFILL["创建履约单"]', 'FULFILL --> SHIP["仓库发货"]',
+    'SHIP --> COMPLETE(["确认收货"])', 'COMPLETE --> NOTICE',
+    'RESULT -->|失败| RELEASE["释放预占库存"]', 'RELEASE --> CANCEL["关闭订单"]',
+    'CANCEL --> NOTICE', 'RESULT -->|待确认| RECHECK["查询网关回执"]', 'RECHECK -. 更新 .-> RESULT',
+  ], ["订单", "幂等", "重试", "补偿", "15节点", "边标签"]);
+  flow("LR", "extreme-chain", "媒体发布的并行加工与审核返工", "复杂", [
+    'UPLOAD["上传素材"] --> CHECK{"格式可处理？"}',
+    'CHECK -->|否| REJECT["反馈拒绝原因"]', 'CHECK -->|是| STORE[("素材存储")]',
+    'STORE --> SCAN["内容安全扫描"]', 'STORE --> TRANSCODE["视频转码"]',
+    'STORE --> COVER["生成封面"]', 'STORE --> TEXT["提取字幕"]',
+    'SCAN --> REVIEW{"审核与加工完成？"}', 'TRANSCODE --> REVIEW', 'COVER --> REVIEW', 'TEXT --> REVIEW',
+    'REVIEW -->|通过| CDN["分发至边缘缓存"]', 'CDN --> PUBLISH["发布内容"]', 'PUBLISH --> NOTIFY["通知订阅者"]',
+    'REVIEW -->|需修改| REEDIT["重新编辑素材"]', 'REEDIT -. 新版本 .-> STORE',
+    'REVIEW -->|禁止发布| CLEANUP["删除临时产物"]', 'CLEANUP --> REJECT',
+  ], ["媒体发布", "并行", "汇聚", "返工", "14节点"]);
+  flow("LR", "fan-out", "工作台并行查询与推荐超时降级", "复杂", [
+    'REQUEST["打开业务工作台"] --> AUTH{"会话有效？"}', 'AUTH -->|否| DENIED["提示重新登录"]',
+    'AUTH -->|是| PROFILE["用户资料"]', 'AUTH --> ORDERS["近期订单"]',
+    'AUTH --> STOCK["库存摘要"]', 'AUTH --> BILLING["账单摘要"]', 'AUTH --> RECOMMEND["个性化推荐"]',
+    'PROFILE --> AGG["按截止时间汇总"]', 'ORDERS --> AGG', 'STOCK --> AGG', 'BILLING --> AGG',
+    'RECOMMEND -->|正常| AGG', 'RECOMMEND -. 超时 .-> FALLBACK["使用默认推荐"]', 'FALLBACK --> AGG',
+    'AGG --> VIEW["展示工作台"]', 'VIEW --> METRICS["记录分支耗时"]',
+  ], ["工作台", "扇出", "扇入", "降级", "12节点"]);
+  flow("TD", "fan-in", "多渠道工单归并与优先级分流", "复杂", [
+    'WEB["网页表单"] --> NORMALIZE["统一消息格式"]', 'MAIL["客户邮件"] --> NORMALIZE',
+    'PHONE["电话记录"] --> NORMALIZE', 'BOT["客服机器人"] --> NORMALIZE',
+    'NORMALIZE --> DEDUPE["过滤重复消息"]', 'DEDUPE --> MATCH{"存在关联工单？"}',
+    'MATCH -->|是| APPEND["追加到原工单"]', 'APPEND --> ACK["发送受理回执"]',
+    'MATCH -->|否| CREATE["创建新工单"]', 'CREATE --> PRIORITY["计算处理优先级"]',
+    'PRIORITY --> QUEUE["分派到值班队列"]', 'QUEUE --> ACK',
+  ], ["客服", "多来源", "扇入", "去重", "12节点"]);
+  flow("LR", "dense", "订单事件路由与消费者回执汇聚", "复杂", [
+    'API["接收下单请求"] --> ORDER[("保存订单")]',
+    'ORDER --> OUTBOX["写入待投递事件"]', 'OUTBOX --> BUS["发布订单事件"]',
+    'BUS --> INVENTORY["库存消费者"]', 'BUS --> PAYMENT["支付消费者"]', 'BUS --> COUPON["优惠券消费者"]',
+    'INVENTORY --> STOCK_ACK["库存回执"]', 'PAYMENT --> PAY_ACK["支付回执"]', 'COUPON --> COUPON_ACK["优惠券回执"]',
+    'STOCK_ACK --> READY{"履约条件齐备？"}', 'PAY_ACK --> READY', 'COUPON_ACK --> READY',
+    'READY -->|是| FULFILL["启动履约"]', 'FULFILL --> NOTIFY["发送订单通知"]', 'NOTIFY --> AUDIT["保存处理轨迹"]',
+    'READY -->|回执缺失| WAIT["延迟核对与定向补投"]', 'WAIT -. 补投事件 .-> BUS',
+  ], ["事件驱动", "稀疏跨层", "汇聚", "补投", "15节点"]);
   flow("TD", "feedback", "十二节点多级回边", "复杂", [
     ...chain(12), 'N10 -. 重新校验 .-> N2', 'N9 -->|回退| N4', 'N7 ==> N1',
     'N5 -.-> N3', 'N11 --> N0', 'N6 --> N6',
@@ -71,11 +98,14 @@
     'H["业务出口"]', 'end', 'A --> B', 'B --> C', 'E --> G', 'F --> G',
     'G --> H', 'X["外部通知"]', 'H --> X', 'X -. 重试 .-> A',
   ], ["嵌套子图", "跨组边", "9节点", "保留原布局"]);
-  flow("LR", "components", "四个互不相连的组件", "中等",
-    range(4).flatMap((group) => [
-      ...range(5).map((i) => `G${group}N${i}["组件 ${group + 1} · 节点 ${i + 1}"]`),
-      ...range(4).map((i) => `G${group}N${i} --> G${group}N${i + 1}`),
-    ]), ["多组件", "20节点", "保留原布局"]);
+  flow("LR", "components", "查询交互、日报与审批三个独立流程", "中等", [
+    'CLIENT["业务客户端"] <-->|请求与回执| API["查询服务"]',
+    'API --> DATABASE[("业务数据库")]', 'API -. 访问记录 .-> ACCESS_LOG["查询审计"]',
+    'SCHEDULE["日报定时器"] --> DIGEST["生成业务摘要"]', 'DIGEST --> MAIL["发送邮件"]',
+    'MAIL -. 失败 .-> RETRY["延迟重试"]', 'RETRY --> MAIL',
+    'APPLICATION["申请单"] --> REVIEW{"审批结论"}',
+    'REVIEW -->|通过| PUBLISH["生效并公示"]', 'REVIEW -->|退回| REJECT["反馈补充材料"]',
+  ], ["多组件", "双向", "请求回执", "定时任务", "审批", "12节点", "保留原布局"]);
   flow("LR", "shapes", "十类轮廓串联折返", "复杂", [
     ...shapes.map((shape, i) => shape(`S${i}`, `形状 ${i + 1}`)),
     ...range(shapes.length - 1).map((i) => `S${i} --> S${i + 1}`),
@@ -85,30 +115,55 @@
     'D --- E["无箭头"]', 'E <--> F["双箭头"]', 'F o--o G["双圆点"]',
     'G x--x H["双叉"]', 'H --o I["圆点终端"]', 'I --x J["叉形终端"]',
   ], ["实线", "虚线", "粗线", "无头", "双头", "圈叉", "10节点", "反向"]);
-  flow("TD", "labels", "中英文标识符与多行标签", "复杂", chain(12, (i) => [
-    "中文流程节点", "English operation", "request_id_v2_alpha_001",
-    "中英文 Mixed label", "第一行<br/>第二行", "v2.0 / API : JSON",
-  ][i % 6]), ["长标签", "CJK", "多行", "中英文", "12节点"]);
-  flow("LR", "long-identifiers", "长英文标识符与文字不截断", "压力",
-    chain(10, (i) => `UPSTREAM_RESPONSE_TRANSFORMATION_VALIDATION_STAGE_${String(i + 1).padStart(2, "0")}`),
-    ["超宽", "长英文", "标识符", "10节点"]);
+  flow("TD", "labels", "合作方Webhook的中英文校验与重放", "复杂", [
+    'CLIENT["Partner webhook<br/>接收合作方事件"] --> VERIFY{"Signature valid?<br/>签名是否有效"}',
+    'VERIFY -->|No| REJECT["Reject request<br/>返回明确错误"]', 'VERIFY -->|Yes| DEDUPE{"event_id 已处理？"}',
+    'DEDUPE -->|是| ACK["200 OK<br/>返回幂等回执"]', 'DEDUPE -->|否| VALIDATE{"Schema v2.0 valid?"}',
+    'VALIDATE -->|否| INVALID["Invalid payload<br/>记录字段错误"]', 'INVALID --> REJECT',
+    'VALIDATE -->|是| NORMALIZE["Normalize JSON<br/>统一币种与时间"]', 'NORMALIZE --> STORE[("Persist event<br/>保存原始事件")]',
+    'STORE --> PROJECT["Update projection<br/>更新业务视图"]',
+    'PROJECT -->|成功| ACK', 'PROJECT -. 可重试错误 .-> RETRY["Retry with backoff<br/>指数退避重放"]',
+    'RETRY --> PROJECT', 'ACK --> AUDIT["Audit trail<br/>记录处理结果"]',
+  ], ["长标签", "CJK", "英文换行", "多行", "中英文", "重放", "12节点"]);
+  flow("LR", "long-identifiers", "英文数据契约校验与兼容迁移", "复杂", [
+    'SOURCE["UPSTREAM_RESPONSE_TRANSFORMATION<br/>Receive partner export"] --> FORMAT{"CONTENT_TYPE_VALIDATION<br/>Supported format?"}',
+    'FORMAT -->|No| REJECT["REJECT_UNSUPPORTED_CONTENT<br/>Return validation report"]',
+    'FORMAT -->|Yes| DECODE["DECODE_PARTNER_PAYLOAD<br/>Read typed records"]',
+    'DECODE --> VERSION{"SCHEMA_COMPATIBILITY_CHECK<br/>Current schema?"}',
+    'VERSION -->|Legacy| MIGRATE["MIGRATE_LEGACY_RECORDS<br/>Map deprecated fields"]', 'MIGRATE --> MATCH',
+    'VERSION -->|Current| MATCH{"BUSINESS_KEY_MATCH<br/>Known customer?"}',
+    'MATCH -->|Yes| UPSERT["UPSERT_CUSTOMER_RECORD<br/>Commit validated fields"]',
+    'MATCH -->|No| QUARANTINE["QUARANTINE_UNKNOWN_CUSTOMER<br/>Request manual mapping"]',
+    'UPSERT --> REPORT["EXPORT_IMPORT_REPORT<br/>Summarize accepted and held records"]', 'QUARANTINE --> REPORT',
+  ], ["长英文", "英文换行", "标识符", "兼容迁移", "10节点"]);
   flow("LR", "parallel-edges", "平行边与双向重试路径", "中等", [
     'A["请求方"] -->|同步请求| B["执行方"]', 'A -. 异步通知 .-> B',
     'B -->|同步返回| A', 'B -. 状态回执 .-> A',
     'A ==> C["缓存层"]', 'C --> B', 'B --> D["归档层"]', 'C --- D',
   ], ["平行边", "回边", "4节点"]);
-  flow("LR", "grid", "六乘六网格交叉路由", "压力", [
-    ...range(6).flatMap((row) => range(6).map((col) => `R${row}C${col}["${row + 1}行 ${col + 1}列"]`)),
-    ...range(6).flatMap((row) => range(5).map((col) => `R${row}C${col} --> R${row}C${col + 1}`)),
-    ...range(5).flatMap((row) => range(6).map((col) => `R${row}C${col} -.-> R${row + 1}C${col}`)),
-  ], ["网格", "密集交叉", "36节点", "60边", "保留原布局"]);
-  flow("BT", "grouped", "六段反向分支组连续流程", "压力",
-    range(6).flatMap((group) => [
-      `S${group}["阶段 ${group + 1} 入口"] -->|校验| A${group}["权限检查"]`,
-      `S${group} -->|读取| B${group}["加载数据"]`,
-      `A${group} --> J${group}["阶段 ${group + 1} 汇合"]`, `B${group} --> J${group}`,
-      ...(group < 5 ? [`J${group} -->|继续| S${group + 1}`] : []),
-    ]), ["连续分支组", "扇出", "扇入", "24节点", "反向", "折返", "换列"]);
+  flow("LR", "grid", "仓储履约、物流追踪与客服补发", "复杂", [
+    'ORDER["订单中心"]',
+    'subgraph WAREHOUSE["仓储履约"]', 'direction TB',
+    'STOCK{"主仓有货？"}', 'PICK["主仓拣货"]', 'TRANSFER["备仓调拨"]',
+    'QUALITY{"质检通过？"}', 'REWORK["返工处理"]', 'PACK["打包与称重"]', 'end',
+    'subgraph SHIPPING["物流协作"]', 'direction TB',
+    'LABEL["生成运单"]', 'DISPATCH["发运交接"]', 'TRACK["轨迹聚合"]', 'EXCEPTION{"运输异常？"}', 'end',
+    'SERVICE["客服处置"]', 'REISSUE["补发工单"]', 'DELIVERED(["签收完成"])', 'AUDIT["审计事件"]',
+    'ORDER --> STOCK', 'STOCK -->|有货| PICK', 'STOCK -->|缺货| TRANSFER', 'TRANSFER --> PICK',
+    'PICK --> QUALITY', 'QUALITY -->|失败| REWORK', 'REWORK --> PICK', 'QUALITY -->|通过| PACK',
+    'PACK --> LABEL', 'LABEL --> DISPATCH', 'DISPATCH --> TRACK', 'TRACK --> EXCEPTION',
+    'EXCEPTION -->|正常| DELIVERED', 'EXCEPTION -->|异常| SERVICE', 'SERVICE --> REISSUE',
+    'REISSUE -. 补发 .-> STOCK', 'ORDER -.-> AUDIT', 'TRACK -.-> AUDIT', 'DELIVERED --> AUDIT',
+  ], ["子图", "跨层", "仓储", "物流", "补发", "15节点", "保留原布局"]);
+  flow("BT", "grouped", "告警归并、并行诊断与回滚复核", "复杂", [
+    'ALERT["接收告警"] --> CLASSIFY["识别服务与等级"]', 'CLASSIFY --> DEDUPE{"已有同源事件？"}',
+    'DEDUPE -->|是| LINK["关联既有事故"]', 'LINK --> OWNER["确定处置负责人"]', 'DEDUPE -->|否| OWNER',
+    'OWNER --> METRICS["检查指标变化"]', 'OWNER --> TRACE["分析调用链"]',
+    'METRICS --> DIAGNOSE["形成诊断结论"]', 'TRACE --> DIAGNOSE',
+    'DIAGNOSE --> MITIGATE["执行恢复措施"]', 'MITIGATE --> VERIFY{"服务恢复？"}',
+    'VERIFY -->|否| ROLLBACK["回滚并调整方案"]', 'ROLLBACK --> MITIGATE',
+    'VERIFY -->|是| DOCUMENT["补充事故时间线"]', 'DOCUMENT --> CLOSE(["关闭事故"])',
+  ], ["反向", "告警", "去重", "并行诊断", "回滚", "13节点"]);
 
   add("sequence-alt", "sequenceDiagram", "条件分支与多级返回", "中等", `sequenceDiagram
 autonumber
@@ -216,16 +271,78 @@ Note right of B: 校验参数<br/>检查权限<br/>记录状态
 B->>B: 内部操作<br/>保持自调用文字完整
 B-->>A: 第一行响应<br/>第二行响应
 Note left of A: 页面恢复就绪`, ["长英文", "多行", "notes"], true);
-  add("sequence-long", "sequenceDiagram", "六十条消息与两位序号", "压力",
-    ["sequenceDiagram", "autonumber", "participant A as 请求端", "participant B as 响应端",
-      ...range(30).flatMap((i) => [`A->>B: 第 ${i + 1} 次请求`, `B-->>A: 第 ${i + 1} 次返回`])].join("\n"),
-    ["超长", "60消息", "序号居中"]);
-  add("sequence-wide", "sequenceDiagram", "十二参与者横跨消息", "压力",
-    ["sequenceDiagram", "autonumber",
-      ...range(12).map((i) => `participant P${i} as 第 ${i + 1} 个处理节点`),
-      ...range(11).map((i) => `P${i}->>P${i + 1}: 传递 ${i + 1}`),
-      "P11-->>P0: 跨越全部参与者的最终回执",
-      "P0->>P0: 本地确认"].join("\n"), ["超宽", "12参与者", "跨越消息"], true);
+  add("sequence-long", "sequenceDiagram", "结账到履约的八方协作与失败补偿", "复杂", `sequenceDiagram
+autonumber
+actor C as 顾客
+participant P as 结账页面
+participant O as 订单服务
+participant S as 库存服务
+participant G as 支付网关
+participant E as 事件总线
+participant F as 履约服务
+participant N as 通知服务
+C->>P: 确认结账
+P->>O: 提交幂等订单
+O->>S: 预占库存
+S-->>O: 预占成功
+O->>G: 扣款请求
+G-->>O: 支付结果
+alt 支付成功
+  O->>E: 发布已支付事件
+  E-->>O: 已持久化
+  par 启动履约
+    E->>F: 创建发货任务
+    F-->>E: 任务已接收
+  and 发送通知
+    E->>N: 发送支付成功通知
+    N-->>E: 通知已受理
+  end
+  O-->>P: 返回订单号
+  P-->>C: 显示待发货状态
+else 支付失败
+  O->>S: 释放预占库存
+  S-->>O: 已释放
+  O-->>P: 返回失败原因
+  P-->>C: 保留购物车并提示重试
+end`, ["8参与者", "18消息", "并行", "补偿", "两位序号", "序号居中"]);
+  add("sequence-wide", "sequenceDiagram", "采购到货、票据核对与退货协作", "复杂", `sequenceDiagram
+autonumber
+actor R as 申请人
+participant P as 采购门户
+participant A as 审批服务
+participant E as ERP
+participant S as 供应商
+participant W as 仓库
+participant Q as 质检
+participant F as 财务
+participant C as 承运商
+participant N as 通知服务
+R->>P: 提交采购需求
+P->>A: 发起预算审批
+A-->>P: 审批通过
+P->>E: 创建采购订单
+E->>S: 发送采购单
+S-->>E: 确认交期
+par 实物到货
+  S->>C: 交付货物
+  C->>W: 入库交接
+  W->>Q: 提交抽检
+  Q-->>E: 回传验收结果
+and 票据核对
+  S->>F: 提交发票
+  F-->>E: 金额与订单匹配
+end
+alt 验收通过
+  E->>F: 发起结算
+  F-->>S: 发送付款回执
+  E->>N: 更新到货状态
+  N-->>R: 通知领取
+else 验收不通过
+  E->>C: 创建退货运单
+  C-->>S: 交回异常货物
+end
+E-->>P: 同步采购状态
+P-->>R: 展示处理进度`, ["超宽", "10参与者", "跨越消息", "并行", "退货"], true);
 
   add("state-composite", "stateDiagram-v2", "嵌套状态与内部终态", "复杂", `stateDiagram-v2
 [*] --> Idle
@@ -289,11 +406,38 @@ note right of Waiting
 end note
 note left of Processing : 此处为持久化边界
 Processing --> [*]`, ["notes", "CJK", "长标签"]);
-  add("state-long", "stateDiagram-v2", "三十状态连续转换", "压力",
-    ["stateDiagram-v2", "[*] --> S0",
-      ...range(30).map((i) => `state "状态 ${i + 1}" as S${i}`),
-      ...range(29).map((i) => `S${i} --> S${i + 1}: 事件 ${i + 1}`),
-      "S29 --> [*]"].join("\n"), ["超长", "30状态"]);
+  add("state-long", "stateDiagram-v2", "订单审批、支付补偿与售后退款", "复杂", `stateDiagram-v2
+state "草稿" as Draft
+state "待审批" as AwaitingApproval
+state "已批准" as Approved
+state "已锁库存" as Reserved
+state "支付处理中" as Paying
+state "已支付" as Paid
+state "履约中" as Fulfilling
+state "已签收" as Delivered
+state "已取消" as Cancelled
+state "释放资源中" as Compensating
+state "退款处理中" as Refunding
+state "已退款" as Refunded
+[*] --> Draft
+Draft --> AwaitingApproval: 提交
+AwaitingApproval --> Draft: 补充材料
+AwaitingApproval --> Approved: 批准
+Approved --> Reserved: 锁定库存
+Reserved --> Paying: 发起扣款
+Paying --> Paid: 扣款成功
+Paying --> Compensating: 扣款失败
+Compensating --> Cancelled: 资源已释放
+Paid --> Fulfilling: 下发履约
+Fulfilling --> Delivered: 确认签收
+Paid --> Refunding: 发货前取消
+Delivered --> Refunding: 售后退货
+Refunding --> Refunding: 等待渠道回执
+Refunding --> Refunded: 退款成功
+Draft --> Cancelled: 撤销
+Delivered --> [*]
+Cancelled --> [*]
+Refunded --> [*]`, ["12状态", "审批回退", "支付补偿", "退款", "自环"]);
 
   add("class-members", "classDiagram", "属性方法与标题成员对齐", "排版回归", `classDiagram
 class ApplicationConfiguration {

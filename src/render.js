@@ -8,11 +8,42 @@ import { routeFlowEdges, routeNativeEdges, nodeShape, fitSvgBounds } from "./svg
 import { routeC4Edges } from "./svg-c4.js";
 import { applyAdaptiveFlowLayout } from "./svg-adaptive.js";
 import { resolveEdgeCrossings, recordCrossings } from "./svg-crossings.js";
+import {
+  DEFAULT_RENDER_TIMEOUT_MS,
+  DEFAULT_RUNTIME_TIMEOUT_MS,
+  createSerialScheduler,
+  positiveTimeout,
+  throwIfAborted,
+  withAbortTimeout,
+} from "./runtime-guard.js";
 
 const FLOWCHART_RE = /^\s*(?:flowchart|graph)\b/im;
+// Mermaid 的 frontmatter 必须是文档首部独立的 `---` 行；不能把 YAML
+// 块标量里缩进的 `---` 当成闭合，否则会把 frontmatter 误截断。
+// 这里只做图种分类，不解析或信任 frontmatter 内容；安全过滤仍由 sanitizeMermaidSource 负责。
+const FRONTMATTER_FENCE_RE = /^---\s*$/;
 
-function isFlowchart(source) {
-  for (const line of source.split(/\r?\n/)) {
+function bodyAfterFrontmatter(lines) {
+  let start = 0;
+  while (start < lines.length) {
+    const line = lines[start].replace(/^\uFEFF/, "");
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("%%")) { start++; continue; }
+    break;
+  }
+  if (start >= lines.length || !FRONTMATTER_FENCE_RE.test(lines[start].replace(/^\uFEFF/, ""))) {
+    return lines;
+  }
+  for (let end = start + 1; end < lines.length; end++) {
+    if (FRONTMATTER_FENCE_RE.test(lines[end])) return lines.slice(end + 1);
+  }
+  // 未闭合的 frontmatter 按原样处理：不要把后面的 `flowchart` 误判为
+  // 文档首行，否则会把非法 YAML 送进流程图专用链路并掩盖原始错误。
+  return lines;
+}
+
+export function isFlowchart(source) {
+  for (const line of bodyAfterFrontmatter(String(source || "").split(/\r?\n/))) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("%%")) continue;
     return FLOWCHART_RE.test(line);
@@ -359,9 +390,12 @@ function rewritePathEndpoint(path, atStart, local) {
   if (next !== data) path.setAttribute("d", next);
 }
 
-function repairEdgeConnections(svg) {
+function repairEdgeConnections(svg, onlyElement = null) {
   const outlines = nodeOutlines(svg);
-  for (const edge of svg.querySelectorAll(`${CONNECTED_EDGE_SELECTOR}, [data-gptm-source]`)) {
+  const elements = onlyElement
+    ? (onlyElement.matches?.(`${CONNECTED_EDGE_SELECTOR}, [data-gptm-source]`) ? [onlyElement] : [])
+    : svg.querySelectorAll(`${CONNECTED_EDGE_SELECTOR}, [data-gptm-source]`);
+  for (const edge of elements) {
     const points = layoutPoints(edge);
     if (!points) continue;
     for (const atStart of [true, false]) {
@@ -523,7 +557,9 @@ function postProcessSvg(svgMarkup, variables, graph, config = {}) {
     repairSequenceConnections(live);
     placeEdgeLabels(live);
     resolveEdgeCrossings(live, repairEdgeConnections);
-    if (graph || Number(live.getAttribute("data-gptm-native-routes")) > 0) fitSvgBounds(live);
+    if (graph || Number(live.getAttribute("data-gptm-native-routes")) > 0
+        || live.hasAttribute("data-gptm-planar-layout")
+        || Number(live.getAttribute("data-gptm-spacing-factor")) > 1) fitSvgBounds(live);
     colorDirectionalEdges(live, variables);
     const shafts = trimArrowShafts(live);
     live.setAttribute("data-gptm-trimmed-shafts", String(shafts.trimmed));
@@ -570,12 +606,13 @@ function loadScript(url) {
 
 export function createRenderer(baseUrl = document.baseURI) {
   let runtimePromise = null;
-  let renderChain = Promise.resolve();
+  const renderQueue = createSerialScheduler();
   let sequence = 0;
   let initialized = false;
   let configKey = "";
 
-  async function runtime(config) {
+  async function runtime(config = {}, signal) {
+    throwIfAborted(signal);
     if (config.runtime && typeof config.runtime.render === "function") return config.runtime;
     if (globalThis.mermaid?.render) return globalThis.mermaid;
     if (!runtimePromise) {
@@ -588,7 +625,11 @@ export function createRenderer(baseUrl = document.baseURI) {
         throw error;
       });
     }
-    return runtimePromise;
+    return withAbortTimeout(runtimePromise, {
+      signal,
+      timeoutMs: positiveTimeout(config.runtimeTimeoutMs, DEFAULT_RUNTIME_TIMEOUT_MS),
+      timeoutMessage: "gpt-mermaid: runtime load timed out",
+    });
   }
 
   function initialize(mermaid, config, flowchart) {
@@ -641,19 +682,27 @@ export function createRenderer(baseUrl = document.baseURI) {
     configKey = nextKey;
   }
 
-  async function renderSvg(rawSource, config) {
+  async function renderSvg(rawSource, config = {}) {
     const source = sanitizeMermaidSource(rawSource);
     if (!source) throw new Error("gpt-mermaid: diagram source is empty or contains blocked directives");
-    const task = renderChain.then(async () => {
+    const timeoutMs = positiveTimeout(
+      config.renderTimeoutMs ?? config.timeoutMs,
+      DEFAULT_RENDER_TIMEOUT_MS,
+    );
+    return renderQueue.schedule(async (signal) => {
+      throwIfAborted(signal);
       const flowchart = isFlowchart(source);
-      const mermaid = await runtime(config);
+      const mermaid = await runtime(config, signal);
+      throwIfAborted(signal);
       initialize(mermaid, config, flowchart);
       const id = `mgpt-${Date.now().toString(36)}-${++sequence}`;
       const result = await mermaid.render(id, source);
+      throwIfAborted(signal);
       if (!result?.svg) throw new Error("gpt-mermaid: renderer returned no SVG");
       let graph;
       if (mermaid.mermaidAPI?.getDiagramFromText && (flowchart || /^\s*C4\w+/m.test(source))) {
         const diagram = await mermaid.mermaidAPI.getDiagramFromText(source);
+        throwIfAborted(signal);
         if (flowchart && diagram.db.getData) graph = { ...diagram.db.getData(), direction: diagram.db.getDirection() };
         else if (diagram.db.getRels) graph = { c4Nodes: diagram.db.getC4ShapeArray(), c4Relations: diagram.db.getRels() };
       }
@@ -666,6 +715,7 @@ export function createRenderer(baseUrl = document.baseURI) {
         svg = svg.replace(/<svg\b[^>]*>/, (tag) => `${tag}${style}`);
       }
       const processed = postProcessSvg(svg, config.themeVariables, graph, config);
+      throwIfAborted(signal);
       const clean = sanitizeSvgMarkup(processed);
       const size = svgSize(clean);
       const root = new DOMParser().parseFromString(clean, "image/svg+xml").documentElement;
@@ -683,13 +733,15 @@ export function createRenderer(baseUrl = document.baseURI) {
           reason: root.getAttribute("data-gptm-routing-reason") || "",
         },
       };
+    }, {
+      signal: config.signal,
+      timeoutMs,
+      timeoutMessage: "gpt-mermaid: render timed out",
     });
-    renderChain = task.then(() => undefined, () => undefined);
-    return task;
   }
 
-  function load(config) {
-    return runtime(config);
+  function load(config = {}) {
+    return runtime(config, config.signal);
   }
 
   return { renderSvg, load, postProcessSvg };

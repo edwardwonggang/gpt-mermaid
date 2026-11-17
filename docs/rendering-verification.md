@@ -2,6 +2,15 @@
 
 兼容性页面统一调用修改后的 `GPTMermaid.mount()`。直接挂载数据源，避免浏览器 Mermaid 扩展提前替换代码块。
 
+## 当前证据状态（2026-11-18）
+
+本轮文档只确认已经落盘或可静态复现的证据，不把配置好的 CI job 当成已通过：
+
+- Chromium 原生触摸输入报告为 **14 项**，详见 `output/playwright/touch/touch-gestures.json`。
+- WebKit 26.5 手机视口已生成最终 `output/playwright/webkit/touch-gestures.json`：14 项合成触点状态机检查通过，页面错误 0；仍不得当作 Safari 原生多指或物理 iPhone 通过。
+- 物理 iPhone、Firefox、GitHub Pages 当前工作树版本和 npm 发布均不能由本地报告替代。
+- 通过构建、单测、API 类型或 E2E 不等于已完成全量发布；发布状态必须另查对应平台。
+
 ## 修复机制
 
 | 现象 | 根因 | 修复 |
@@ -53,7 +62,7 @@ PORT=4174 npm run serve
 - 自定义边色保持优先。布局器没有提供端点元数据的未知关系不会被按“最近节点”随意改接。
 - 同向同样式实线允许共享末端；虚线相位、不同线型、双向/圈叉端点不能误合并。共享的每条线杆都按主箭头深度裁切。
 - 自动折返适用于平坦长链和具有安全切口的连续分支组。反馈、自环、跨层连边、子图或不可分割的大组会保留原布局，并输出 `data-gptm-adaptive` 与原因。阈值约束主轴，不能承诺任意密图都塞进固定矩形。
-- 本轮浏览器验收是 Chromium；Safari、Firefox 尚无实测结果。独立库修复不代表 `my-ai-hub` 内旧渲染器已经同步部署。
+- 浏览器覆盖范围按文末最新记录：Chromium有完整E2E；WebKit 26.5手机视口有最终非真机报告和14项合成触屏状态机证据。两者都不能替代真实 iPhone 所有版本；Firefox尚未实测。独立库修复不代表 `my-ai-hub` 内旧渲染器已经同步部署。
 - 回滚使用 Git 提交恢复源码和 `dist/` 后重新加载页面；无需迁移用户数据。
 
 ## 局部放大复核与原生图种修复（2026-11-17）
@@ -87,14 +96,14 @@ PORT=4174 npm run serve
 5. 改路后重新贴真实轮廓、放标签、裁箭杆，再输出最终检测结果。特殊UML/ER端点保留实际偏移与切线，其图不自动扩间距；簇/组合布局也不单独移动子节点。
 6. 总寻路工作量有确定上限，未解交叉保留 `unresolved`，不隐藏边、不假报成功。
 
-当前真实回归结果：
+该阶段的真实回归结果（后续更新见文末）：
 
 - 43项单测通过，其中28项路由测试，包含共享末段误豁免、浅角、短折线和语义端点反例。
 - 9个图种/改名方向变体经浏览器独立采样，均未发现交叉，包括用户状态图、状态choice、反馈流程、C4和TB/BT/LR/RL状态变体。
 - 100张有效图中50张包含本检测器的关系线：46张为 `clear`，4张为 `unresolved`；其余50张为 `not-applicable`，不能计作零交叉通过。
 - 既有21图/52三角/40轮廓点、40图/142标签、100图/624三角的几何和遮挡回归，以及滚轮、导出、移动端与预期错误回退继续通过。
 
-仍未解决的复杂样例，按相交边对计数：
+该阶段仍未解决的复杂样例，按相交边对计数（后续已继续修复）：
 
 | 样例 | 改前 | 改后 | 当前约束 |
 | --- | ---: | ---: | --- |
@@ -103,6 +112,99 @@ PORT=4174 npm run serve
 | `stress-class-hierarchy` | 19 | 15 | 达到寻路计算预算 |
 | `stress-er-network` | 7 | 7 | 达到预算，保持基数端点语义 |
 
-**这四项是遗留问题，不是已完成的零交叉验收。** 仅有边数上界的案例可由该上界判定不可平面化；搜索失败不能证明其它图无解。
+**当时这四项未完成零交叉验收。** 仅有边数上界的案例可由该上界判定不可平面化；搜索失败不能证明其它图无解。
 
 `test/crossing-quality.mjs` 随完整E2E运行，结果在 `output/playwright/route-quality/crossing-quality.json`，完整日志在同目录 `e2e.log`。`before.json`保存旧版三个坏例，`state-after.png`保存截图反馈图的最终实测。`renderSvg()` 的新增 `routing` 字段和兼容页文字用于区别渲染成功、已检查无交叉与未解交叉。
+
+## 箭头接触、实用变体与剩余交叉修复（2026-11-17）
+
+用户指出三角被框盖住、三角悬空后，新增 `test/arrow-contacts.mjs`：采样三角内部，检查节点/胶囊真实填充及描边遮挡；检查可见线杆是否接触三角边界；对有所属身份的端点检查真实轮廓。它独立于交叉检测，不能用“无交叉”替代这些细节。
+
+本轮实际复现并修复：
+
+| 根因 | 修复与独立反例 |
+| --- | --- |
+| 虚线空白相位刚好落在三角底部 | 仅补三角边界外3单位接头，主体相位保留 |
+| 三角沿切线的深度被直接当作曲线弧长 | 求实际曲线首次离开三角的交界弧长；完全被三角覆盖的短折线裁去全部线身 |
+| C4退化Bezier的dash着墨端与弧长有约0.3单位差异 | 受限0.4单位底部重合，线杆仍远离尖端；四方向64倍尖端像素继续通过 |
+| 浅角进入fork/join横条，尖端贴边但三角侧面在框里 | 检查完整三角的轮廓相交，必要时改变入射路径 |
+| 长标签自环没有为整个胶囊预留空间 | 原生自环按标签尺寸扩展，路径与标签联合锁位，后续边避让 |
+| 标签只避线中心，仍会盖住箭头 | 标签候选避开完整三角预留区域；固定候选也必须重新检查 |
+| 同侧进出端口强制共享汇入，主干穿过回线且不能调整 | 有同侧出线时保留独立入线端口，平行关系故障降为0交叉 |
+| 可平面ER被原节点排列限制 | 结构化外围环/重心候选，有限旋转和比例择优，实际节点框/标签/最终交叉合格才采用；同步更新viewBox |
+
+演示页替换13个过度串行、全连接或重复规模案例，保留79压力例+22基础例。新图主要覆盖8–18节点业务结构：订单补偿、媒体审核、事件汇聚、Webhook重放、工单去重、仓储补发、英文契约等。平行边、复杂类图和ER三个故障例原源码保持；不通过删掉故障例提高通过率。折返用8步订单流程配600宽画布验证，不再要求60节点串行。
+
+`test/practical-variants.mjs` 额外生成15个演示页之外的图：重试/并行汇聚/请求回执各四方向、两种字体，长英文自环、横向fork/join和改名ER。全部同时接受交叉、三角接触及标签遮挡检查。新变体确实抓到了长自环标签互盖，修复后才通过。
+
+最新结果：
+
+- 54项单测通过，包含28项路由、8项箭杆和8项平面候选测试；输入冻结、改名、重排、退化、非有限值和非法身份均覆盖。
+- Chromium完整E2E：100有效图+1预期错误；41图124标签；100图454三角接触/互遮；9个独立交叉方向样例；15个实用变体；滚轮、复制、SVG/PNG、手机宽度与64倍尖端检查通过。
+- 100有效图中49张关系图为 `clear`，1张复杂类图为 `unresolved`，50张为 `not-applicable`。ER由7对交叉降至0，平行边由2对残留降至0。
+- 唯一剩余复杂类图包含 `K3,3` 细分，保持全部关系且不许重叠时不能平面零交叉。当前实测保留了 17 对交叉；该数值会随布局优化变化，验收固定的是 `unresolved + search-budget + 36 条已检查关系`，不锁死具体对数。原图保留并报告残留，证据见 [non-planar-class-evidence.md](non-planar-class-evidence.md)。不能把该证书套给其它搜索失败的图。
+- WebKit 26.5手机模拟使用390×844、3倍像素密度，最终报告覆盖100有效图、15个实用变体和14项合成触屏状态机检查，页面错误0。它证明 WebKit 状态机和非真机视口路径，不证明 Safari 原生双指或物理设备滚动。
+
+WebKit重放（先安装项目锁定版本）：
+
+```sh
+PLAYWRIGHT_BROWSERS_PATH="$PWD/.ms-playwright" npx playwright install webkit
+PLAYWRIGHT_BROWSERS_PATH="$PWD/.ms-playwright" node test/webkit-mobile.mjs
+```
+
+WebKit不支持Playwright移动模式注入鼠标滚轮，真实滚轮由桌面Chromium E2E验收；手机触屏范围见下节。尺寸Observer写回合并到下一帧，销毁时取消，以避免WebKit在同一交付阶段重复触发循环。
+
+最终证据位于 `output/playwright/final-fixes/chromium-e2e.log`、`targeted-browser.json`、`output/playwright/route-quality/crossing-quality.json` 和 `output/playwright/webkit/`。WebKit 目录现已包含 `touch-gestures.json`；报告仍明确区分合成 PointerEvent 与真机原生手势。
+
+## 安全、API、性能与 CI 门禁（2026-11-18）
+
+### 安全 frontmatter 与 SVG
+
+- frontmatter 只允许出现在文档首部（可带 BOM），仅保留 `title` 与 `displayMode`。`config`、flow-style 注入、非法 JSON 和未知键会被丢弃。
+- frontmatter 边界跳过 YAML 块标量中的缩进 `---`；未闭合 frontmatter 不会让后续正文被误判。流程图分类读取 frontmatter 后的真实图种声明，`title: flowchart guide` 不会把 sequenceDiagram 误判成 flowchart。
+- `click` 语句在行首和分号后都会移除，引号或括号内的同名文本保留。`securityLevel` 覆盖和不允许的 init 配置被拒绝。
+- SVG 白名单删除 `ping`、`srcset`、事件属性、外部 `href`/`src` 和非白名单命名空间；仅允许本地片段 `xlink:href="#..."`。
+- `<style>` 按根节点安全 ID 作用域化；`@import`、`@namespace`、全局 at-rule、`expression()`、`behavior`、`-moz-binding` 和不安全 `url(...)` 会被丢弃。
+
+### C4、Journey 与自环
+
+- C4 以结构化关系记录完整 `data-gptm-c4-expected`；未匹配、skipped 或有 expected 缺口时，最终 routing 不能变为 `clear`。
+- 最终路径检测包含单边自交；同一节点上的多个自环使用不同 lane，不能因端点相同而完全重合。
+- Journey 任务按词换行，超长无空格英文按字符切分；行数超限时保留全部文字并由 `textLength`/`lengthAdjust` 适配，不截断内容。
+
+### 滚动锁、键盘与 ARIA
+
+- 全屏打开时同时锁定 html/body 滚动并保存 `scrollX/scrollY`；关闭、销毁和异常路径恢复原位置。
+- 菜单按钮和菜单项支持方向键、Home/End/Escape；关闭菜单后恢复触发按钮焦点。
+- 复制失败使用可见 live region；全屏缩放百分比使用 `aria-live="polite"`、`aria-atomic="true"`，对话框、工具栏、预览和图表均有中文可访问名称。
+
+### API 类型、超时与长图视口
+
+- 类型声明分离 ESM (`types/index.d.ts`)、CJS (`types/index.d.cts`) 和 UMD (`types/umd.d.ts`)，并包含 `signal?: AbortSignal`、`renderTimeoutMs?: number`、`runtimeTimeoutMs?: number`。
+- `test:api-types` 运行 esm-bundler、esm-nodenext、cjs、umd 四套 TypeScript 消费配置。
+- 默认可配置保护为渲染 `12000ms`、runtime 加载 `15000ms`。排队中的任务可立即 abort；运行中的任务收到内部 signal；超时后释放串行队列。
+- 行内长图高度上限为 `min(720px, 80vh)`，图片保持完整尺寸并由 stage 独立滚动；全屏 stage 跟随查看器实际高度，横竖屏切换重新读取容器尺寸。
+
+### CI 门禁
+
+- 构建后执行 `git diff --exit-code -- dist`，阻止源码与已提交 `dist/` 漂移。
+- Mermaid runtime 固定为 `12.3.0`，并校验 `5655494` 字节及 SHA-256。
+- 分别执行 `npm test`、`npm run test:api`、`npm run test:api-types` 和 `run-extra-node-tests.mjs`。
+- Chromium E2E 与 WebKit 手机 job 独立运行；package job 执行 `npm pack --dry-run`、实际 tarball 临时安装和 ESM/CJS/UMD 入口冒烟。
+- `verify-ci-coverage.mjs` 会检查新增测试是否进入通配、E2E/WebKit 导入闭包或额外 `node:test` 执行器，并提示未纳入 Git 的测试文件。
+
+## 手机触屏与横竖屏（2026-11-17）
+
+真实Chromium触摸输入先复现两项问题：双指间距80→150时倍率仍为1、仅横移35px；纵向拖动收到`pointercancel`。根因分别是只保存单根指针，以及全屏仍使用`touch-action:pan-y`。修改为按pointerId管理前两指、全屏接管手势，行内不捕获触摸且允许`pan-y pinch-zoom`。
+
+倍率计算使用手势起点的距离、中心与图像位置，触点成员变化时更新基线。逐事件累乘后夹紧会使8倍上限处的等距平移误缩放至7.27倍；固定基线的独立反例已通过。第三指不抢占已有双指；复位、关闭、销毁、失焦和隐藏清理手势。粗指针图标按钮与菜单项至少44px。
+
+横屏曾出现查看区295px、stage仍749px，图像被裁。全屏stage现在跟随容器100%高度，并按当前实际高度适配，横竖屏分别读取stage、父容器、图像矩形验收。
+
+现有 Chromium 落盘报告为 **14项**：tap进出/复位、单指平移、双指缩放及移动中心锚定、2↔1指切换、第三指、0.25/8倍率边界、两指重合、取消/捕获丢失、行内恢复和页面滑动、横竖屏、再次进入无残留。视口变化结束旧触点基线并保持缩放，防止旧坐标差导致下一次微移跳动。
+
+- Chromium使用CDP `Input.dispatchTouchEvent`，读取`isTrusted:true`和实际页面scrollY变化；缩放与移动中心锚定误差0px，行内滑动未preventDefault。原生触摸注入不等于物理手机。
+- WebKit 脚本使用普通 `locator.tap` 开关/复位；多指、取消和捕获由合成 `PointerEvent` 验证，并在报告中标注 `captureEmulated` 与 `nativePageScrollVerified`，不得计为 Safari 原生多指或真机通过。最终 14 项状态机检查已通过。
+- 保留桌面滚轮、行内Ctrl+滚轮、菜单、导出、错误回退和图形几何回归；手势不改变SVG内容，不支持节点单独拖动。
+
+Chromium 重放沿用完整 E2E；WebKit 重放使用 `test/webkit-mobile.mjs`。专项前后对照在 `output/playwright/touch-before.json`、`touch-after.json`；完整触点事件和尺寸断言在 `output/playwright/touch/touch-gestures.json` 与 `output/playwright/webkit/touch-gestures.json`。没有执行破坏性业务数据操作，回滚源码与 dist 至同一 Git 版本后刷新即可。

@@ -8,9 +8,16 @@ export async function verifyLayoutQuality(page, output) {
   const report = await page.evaluate(async () => {
     const selected = [...new Map([...GPT_MERMAID_LAB_CASES, ...GPT_MERMAID_STRESS_CASES]
       .filter((s) => ["flowchart", "C4Context", "stateDiagram-v2", "classDiagram"].includes(s.type)).map((s) => [s.id, s])).values()];
+    selected.push({ id: "practical-fold-small-window", source: `flowchart LR
+Receive[Receive order] --> Validate[Validate items] --> Reserve[Reserve stock] --> Charge[Authorize payment]
+Charge --> Pack[Pack order] --> Ship[Ship parcel] --> Deliver[Confirm delivery] --> Close[Close order]`,
+      options: { adaptiveLayout: { maxWidth: 600, maxHeight: 600, gap: 80 } } });
     const results = [];
     for (const item of selected) {
-      const result = await GPTMermaid.renderSvg(item.source);
+      const result = await GPTMermaid.renderSvg(item.source, item.options);
+      const original = item.id === "practical-fold-small-window"
+        ? await GPTMermaid.renderSvg(item.source, { adaptiveLayout: false })
+        : null;
       const host = document.createElement("div");
       host.style.cssText = "position:absolute;left:-100000px;top:0;width:max-content;";
       host.innerHTML = result.svg; document.body.append(host);
@@ -78,7 +85,8 @@ export async function verifyLayoutQuality(page, output) {
         });
         results.push({ id: item.id, width: result.width, height: result.height, nodes: nodes.length, edges: edges.length,
           labels, collisions, ports, loops, c4, adaptive: svg.dataset.gptmAdaptive, reason: svg.dataset.gptmAdaptiveReason,
-          shared: Number(svg.dataset.gptmSharedArrows || 0), jogs: Number(svg.dataset.gptmSimplifiedJogs || 0), svg: result.svg });
+          shared: Number(svg.dataset.gptmSharedArrows || 0), jogs: Number(svg.dataset.gptmSimplifiedJogs || 0),
+          original: original ? { width: original.width, height: original.height } : null, svg: result.svg });
       } finally { host.remove(); }
     }
     return results;
@@ -103,6 +111,34 @@ export async function verifyLayoutQuality(page, output) {
       else shared.set(port.shared, port);
     }
   }
+  assert.equal(report.length, 41, `布局基准图数量变化：${report.length}`);
+  assert.equal(report.reduce((total, item) => total + item.labels.length, 0), 124, "布局标签总数变化");
+  assert.equal(report.reduce((total, item) => total + item.loops.length, 0), 3, "自环总数变化");
+  assert.equal(report.reduce((total, item) => total + item.c4.length, 0), 10, "C4 对比度项总数变化");
+  const byId = new Map(report.map((item) => [item.id, item]));
+  for (const [id, expected] of Object.entries({
+    "flow-branch": 2,
+    "flow-complex": 6,
+    "state": 4,
+    "stress-flow-td-long-chain": 8,
+    "stress-flow-lr-extreme-chain": 6,
+    "stress-flow-lr-dense": 3,
+    "stress-class-hierarchy": 12,
+  })) {
+    assert.equal(byId.get(id)?.labels.length, expected, `${id} 标签数变化`);
+  }
+  assert.equal(byId.get("flow-both")?.loops.length, 1, "flow-both 自环缺失");
+  assert.equal(byId.get("stress-flow-td-feedback")?.loops.length, 1, "反馈图自环缺失");
+  assert.equal(byId.get("stress-state-long")?.loops.length, 1, "长状态图自环缺失");
+  assert.equal(byId.get("stress-c4-context")?.c4.length, 4, "C4 context 对比度项缺失");
+  assert.equal(byId.get("stress-c4-boundary")?.c4.length, 6, "C4 boundary 对比度项缺失");
+  const fold = byId.get("practical-fold-small-window");
+  assert(fold?.original, "缺少实用折返的原始布局对照");
+  assert.equal(fold.adaptive, "applied", "8步订单链未应用自适应折返");
+  assert.equal(fold.reason, "safe-continuous-flow", "8步订单链折返原因变化");
+  assert(fold.width <= 600, `自适应宽度越过600阈值：${JSON.stringify(fold)}`);
+  assert(fold.original.width > fold.width * 1.25, `原始横向宽度没有明显折返对照：${JSON.stringify(fold)}`);
+  assert(fold.original.height < fold.height, `折返后没有增加纵向高度：${JSON.stringify(fold)}`);
   assert(report.some((r) => r.adaptive === "applied"), "未覆盖真实折返");
   assert(report.some((r) => r.shared > 0) && report.some((r) => r.jogs > 0), "未覆盖共享箭头和短折弯");
   console.log(`布局验收：${report.length} 图，${report.reduce((n, r) => n + r.labels.length, 0)} 个边标签，穿框/自环/对比度/折返断言通过`);

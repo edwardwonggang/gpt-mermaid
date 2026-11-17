@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>gpt-mermaid · 兼容性实验室</title>
-  <link rel="stylesheet" href="../dist/gpt-mermaid.css">
+  <link rel="stylesheet" href="../dist/gpt-mermaid.css?v=20261117-touch">
   <style>
     :root {
       color-scheme: light;
@@ -91,7 +91,7 @@
         <span><i class="swatch up"></i>向上</span>
       </div>
     </div>
-    <p class="guide">长流程自动换行或换列折返；连续分支组只在唯一桥边处分段，组内关系保持完整。反馈环、跨层连接、子图与不可安全切分的分组保留原布局，每张图显示处理结果。可切换“上游原布局”作对照。原始尺寸用于滚动查看；全屏后滚轮缩放、拖动平移，页面内 Ctrl + 滚轮缩放。反馈时请附样例编号。预期错误样例不算渲染缺陷。</p>
+    <p class="guide">长流程自动换行或换列折返；连续分支组只在唯一桥边处分段，组内关系保持完整。反馈环、跨层连接、子图与不可安全切分的分组保留原布局，每张图显示处理结果。可切换“上游原布局”作对照。手机点击“全屏”后，双指捏合缩放、单指拖动整张图；页面内滑动仍用于阅读。电脑全屏后滚轮缩放、拖动平移，页面内 Ctrl + 滚轮缩放。原始尺寸用于滚动查看。反馈时请附样例编号。预期错误样例不算渲染缺陷。</p>
     <progress id="render-progress" value="0" max="1" aria-label="样例渲染进度"></progress>
   </header>
   <main>
@@ -105,8 +105,8 @@
     </div>
     <div class="grid" id="samples"></div>
   </main>
-  <script src="../dist/gpt-mermaid.umd.js"></script>
-  <script src="./stress-cases.js"></script>
+  <script src="../dist/gpt-mermaid.umd.js?v=20261117-touch"></script>
+  <script src="./stress-cases.js?v=20261117-practical"></script>
   <script>
     const samples = [
       {

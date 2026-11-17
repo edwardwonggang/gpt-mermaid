@@ -75,8 +75,32 @@ Completed --> [*]`);
     assert(sample.status !== "clear" || sample.crossings === 0, `${sample.id} 不能假报无交叉`);
     assert(sample.checkedEdges > 0 || sample.status === "not-applicable", `${sample.id} 未检查不能假报通过`);
   }
-  const dense = report.gallery.find((r) => r.id === "stress-flow-lr-dense");
-  assert.equal(dense.reason, "non-planar-edge-bound");
-  assert(dense.crossings > 0);
+  assert.equal(report.gallery.length, 100, `交叉基准图数量变化：${report.gallery.length}`);
+  const statusCounts = report.gallery.reduce((counts, sample) => {
+    counts[sample.status] = (counts[sample.status] || 0) + 1;
+    return counts;
+  }, {});
+  assert.deepEqual(statusCounts, {
+    clear: 49,
+    "not-applicable": 50,
+    unresolved: 1,
+  }, `交叉状态分布变化：${JSON.stringify(statusCounts)}`);
+  for (const id of ["stress-flow-lr-dense", "stress-flow-lr-parallel-edges", "stress-er-network"]) {
+    const sample = report.gallery.find(r => r.id === id);
+    assert.equal(sample.status, "clear", `${id} 可平面的既有故障应被解决`);
+  }
+  const hierarchy = report.gallery.find((sample) => sample.id === "stress-class-hierarchy");
+  assert(hierarchy, "缺少 stress-class-hierarchy 复杂类图");
+  assert.equal(hierarchy.status, "unresolved", "复杂类图必须保持真实 unresolved 状态");
+  assert.equal(hierarchy.reason, "search-budget", "复杂类图未解原因变化");
+  assert(hierarchy.crossings > 0, "复杂类图必须保留真实未解交叉");
+  assert.equal(hierarchy.checkedEdges, 36, "复杂类图已检查边数变化");
+  assert.equal(report.verified.length, 9, `独立采样数量变化：${report.verified.length}`);
+  assert.deepEqual(
+    report.verified.map((sample) => sample.id).sort(),
+    ["state", "stress-flow-td-feedback", "stress-state-choice", "stress-c4-context",
+      "stress-c4-boundary", "renamed-state-BT", "renamed-state-LR", "renamed-state-RL", "renamed-state-TB"].sort(),
+    "独立采样图种清单变化",
+  );
   return report;
 }

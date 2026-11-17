@@ -268,6 +268,22 @@ function simplifyPortJog(edge, start, side, peers, boxes) {
   edge.points = start ? next : next.reverse();
 }
 
+function loopRoute(box, side, size, reach = 0, lane = 0, laneCount = 1) {
+  const horizontal = horizontalSide(side), center = horizontal ? box.y + box.height / 2 : box.x + box.width / 2;
+  const span = Math.min(32, (horizontal ? box.height : box.width) * 0.7);
+  // 同一节点同一侧可能重复自环；按 lane 在节点侧边分槽，避免同心环的
+  // 内侧轨道穿过外侧轨道。单环仍保留原来的完整跨度。
+  const count = Math.max(1, Math.floor(laneCount) || 1);
+  const slotSpan = span / count;
+  const laneCenter = center + (Math.max(0, lane) - (count - 1) / 2) * slotSpan;
+  const laneSpan = count === 1 ? span : Math.max(2, Math.min(span, slotSpan * 0.65));
+  const offset = Math.max(reach, 42, (horizontal ? size.width : size.height) + 24);
+  const a = onSide(box, side, laneCenter - laneSpan / 2), b = onSide(box, side, laneCenter + laneSpan / 2);
+  const axis = horizontal ? "x" : "y";
+  return [a, { ...a, [axis]: a[axis] + signOf(side) * offset },
+    { ...b, [axis]: b[axis] + signOf(side) * offset }, b];
+}
+
 export function routeFlowEdges(svg, graph) {
   const geometry = flowGeometry(svg, graph);
   if (!geometry) return;
@@ -290,9 +306,10 @@ export function routeFlowEdges(svg, graph) {
     for (const port of ports) {
       const { edge, start } = port;
       // 虚线相位、圈叉/双向、显式颜色都不是可丢弃的装饰。
+      // 同侧还有出线时不强制共享汇入，否则共同主干会穿过回退边且锁死后续避障。
       const compatible = !start && edge.source !== edge.target && edge.model.arrowTypeStart === "none"
         && edge.model.arrowTypeEnd === "arrow_point" && edge.model.pattern === "normal"
-        && !edge.model.animate;
+        && !edge.model.animate && !ports.some((other) => other.start);
       const key = compatible ? JSON.stringify([edge.model.thickness, edge.model.style, edge.model.cssCompiledStyles]) : null;
       if (key !== null && bundles.has(key)) bundles.get(key).push(port);
       else { const unit = [port]; units.push(unit); if (key !== null) bundles.set(key, unit); }
@@ -325,17 +342,23 @@ export function routeFlowEdges(svg, graph) {
       if (port.edge.points.length < count) simplified++;
     }
   }
+  const loopCounts = new Map();
+  for (const edge of edges) {
+    if (edge.source !== edge.target) continue;
+    const side = sideOf(edge.points[0], edge.points[1]);
+    const laneKey = `${edge.source.element.id}\0${side}`;
+    loopCounts.set(laneKey, (loopCounts.get(laneKey) || 0) + 1);
+  }
+  const loopLanes = new Map();
   for (const edge of edges) {
     if (edge.source === edge.target) {
       const box = edge.source.box, side = sideOf(edge.points[0], edge.points[1]);
-      const horizontal = horizontalSide(side), center = horizontal ? box.y + box.height / 2 : box.x + box.width / 2;
-      const span = Math.min(32, (horizontal ? box.height : box.width) * 0.7);
       const label = [...svg.querySelectorAll("g.edgeLabel .label[data-id]")].find((l) => l.dataset.id === edge.model.id);
       const size = label ? boundsInSvg(svg, label) : { width: 0, height: 0 };
-      const reach = Math.max(42, (horizontal ? size.width : size.height) + 24);
-      const a = onSide(box, side, center - span / 2), b = onSide(box, side, center + span / 2);
-      const axis = horizontal ? "x" : "y";
-      edge.points = [a, { ...a, [axis]: a[axis] + signOf(side) * reach }, { ...b, [axis]: b[axis] + signOf(side) * reach }, b];
+      const laneKey = `${edge.source.element.id}\0${side}`;
+      const lane = loopLanes.get(laneKey) || 0;
+      loopLanes.set(laneKey, lane + 1);
+      edge.points = loopRoute(box, side, size, 0, lane, loopCounts.get(laneKey) || 1);
       edge.element.setAttribute("data-gptm-self-loop", "true");
       loops++;
     }
@@ -438,6 +461,43 @@ export function routeNativeEdges(svg) {
     });
     return { element, source, target, points: raw.map((p) => inSvg(svg, element, p)), compatible };
   }).filter(Boolean);
+  // 原生状态/类图自环同样要给标签和三角留空间，不能只扩大流程图的环。
+  const loopLabels = new Map([...svg.querySelectorAll("g.edgeLabel")].map((label) => [
+    label.querySelector("[data-id]")?.dataset.id || label.dataset.id, label,
+  ]));
+  const loopCounts = new Map();
+  for (const edge of edges) {
+    if (edge.source !== edge.target || !edge.compatible) continue;
+    const laneKey = edge.source.element.id;
+    loopCounts.set(laneKey, (loopCounts.get(laneKey) || 0) + 1);
+  }
+  const loopLanes = new Map();
+  for (const edge of edges) {
+    if (edge.source !== edge.target || !edge.compatible) continue;
+    const label = loopLabels.get(edge.element.dataset.id), size = label ? boundsInSvg(svg, label) : { width: 0, height: 0 };
+    const initial = sideOf(edge.points[0], edge.points[1]);
+    const obstacles = [...nodes.values()].filter((node) => node !== edge.source).map((node) => node.box);
+    for (const side of [initial, ...["right", "left", "bottom", "top"].filter((s) => s !== initial)]) {
+      const laneKey = edge.source.element.id;
+      const lane = loopLanes.get(laneKey) || 0;
+      const points = loopRoute(edge.source.box, side, size, 0, lane,
+        loopCounts.get(laneKey) || 1);
+      if (!clearRoute(points, obstacles, 4)) continue;
+      const center = { x: (points[1].x + points[2].x) / 2, y: (points[1].y + points[2].y) / 2 };
+      const reservation = nativeLabelBox(center, size);
+      if (label && [...nodes.values()].some(node => boxesOverlap(reservation, node.box))) continue;
+      edge.points = points;
+      writePoints(svg, edge.element, points);
+      if (label) {
+        edge.element.setAttribute("data-gptm-label-x", String(center.x));
+        edge.element.setAttribute("data-gptm-label-y", String(center.y));
+      }
+      edge.element.setAttribute("data-gptm-native-rerouted", "true");
+      edge.element.setAttribute("data-gptm-self-loop", "true");
+      loopLanes.set(laneKey, lane + 1);
+      break;
+    }
+  }
   const groups = new Map(), ports = new Map();
   for (const edge of edges) for (const start of [true, false]) {
     const node = start ? edge.source : edge.target, anchor = start ? edge.points[0] : edge.points.at(-1), box = node.box;
@@ -477,7 +537,10 @@ export function routeNativeEdges(svg) {
   const labelById = new Map([...svg.querySelectorAll("g.edgeLabel")].map((label) => [
     label.querySelector("[data-id]")?.dataset.id, label,
   ]));
-  const reservedLabels = [];
+  const reservedLabels = edges.filter(edge => edge.source === edge.target
+    && edge.element.hasAttribute("data-gptm-label-x")).map(edge => nativeLabelBox({
+    x: Number(edge.element.getAttribute("data-gptm-label-x")), y: Number(edge.element.getAttribute("data-gptm-label-y")),
+  }, boundsInSvg(svg, loopLabels.get(edge.element.dataset.id))));
   const shields = [...ports.values()].filter((port) => port.edge.compatible).map((port) => {
     const arrow = port.edge.element.hasAttribute(port.start ? "marker-start" : "marker-end");
     const half = arrow ? Math.min(9, port.spacing * 0.38) : 2.5, p = port.anchor, horizontal = horizontalSide(port.side);

@@ -1,14 +1,22 @@
 # gpt-mermaid 工程约定
 
 - 源码在 `src/`，通过 `scripts/build.mjs` 生成 UMD、ESM、CJS；修改后同步构建受版本控制的 `dist/`。
-- `src/render.js` 负责串行渲染、主题、箭头与真实轮廓端点；`src/svg-labels.js` 负责文字与序号定位；`src/ui.js` 负责预览和导出。
-- 保留公共 API、严格源码过滤及 SVG 白名单；上游 SVG 必须净化后才能挂载测量，离屏容器在 `finally` 移除。
+- `src/render.js` 负责串行渲染、主题、箭头与真实轮廓端点；`src/runtime-guard.js` 负责超时、取消和队列；`src/svg-labels.js` 负责文字与序号定位；`src/ui.js` 负责预览和导出。
+- 保留公共 API、严格源码过滤及 SVG 白名单；frontmatter 只保留 `title`/`displayMode`，流程图分类读取 frontmatter 后的正文声明，上游 SVG 必须净化后才能挂载测量，离屏容器在 `finally` 移除。
+- SVG 过滤必须删除 `ping`/事件属性/`srcset`/非白名单 XLink 和外部 `href`/`src`；`<style>` 仅按安全根 ID 作用域化，全局 at-rule 与不安全 `url(...)` 不得保留。
 - 三角形的高指底边中点到尖端、沿箭头方向的距离。统一 `10:8` 高底比，仅允许同比缩放；尖端必须与 marker 参考点重合。
+- 三角整体不被框/标签覆盖、线杆可见接触、尖端贴所属轮廓须分别验收。虚线接头可局部补齐，主体相位保持；曲线按实际三角交界裁线。
 - 连接归属使用布局元数据，接触点使用实际轮廓；不能用附近节点或包围盒内点假报贴边。
 - 布局整理按结构化节点/边 ID 绑定，端口改动后重新验证避障；兼容实线共享末端仍保留每条边与标签，每条共享线杆都要裁到主三角底部。
 - 交叉检测读取最终路径，共享仅豁免连续目标后缀；不得按图名/文字特判。`unresolved`、`not-applicable` 不能当作零交叉，特殊端点改路保留实际偏移和切线。
+- C4 必须先记录完整 expected 关系；未匹配/skipped 不能变 `clear`。最终检测包含单边自交，多自环必须分配独立 lane。
 - 折返只在可证明安全的切口进行，节点文字不镜像；复杂反馈、跨层和子图保留原布局并说明原因，不能为固定画布改写拓扑。
-- 标题校准不能抹平子变换、ER 属性列和类图成员的合法左对齐。
+- 标题校准不能抹平子变换、ER 属性列和类图成员的合法左对齐；Journey 按词换行，超长词按字符切分，行数超限保留全文并用 `textLength` 适配。
+- 全屏滚动锁、菜单键盘/焦点恢复、错误 live region 和缩放 `aria-live` 是交互契约；全屏关闭、销毁和异常路径必须恢复滚动位置。
+- 渲染默认 `12000ms`、runtime 默认 `15000ms`，支持 `AbortSignal` 和排队取消。行内长图高度上限为 `min(720px, 80vh)`，图片保持完整并由 stage 滚动。
 - 验收使用已有 E2E 的单个 Chromium/上下文；浏览器版本跟随锁定依赖，缓存放项目 `.ms-playwright/`。
-- 验证入口：`npm run build`、`npm run check`、`npm test`、`PLAYWRIGHT_BROWSERS_PATH="$PWD/.ms-playwright" npm run test:e2e`。
+- 测试优先常见业务拓扑与方向/字体/改名变体，不靠超长纯串行堆数量。WebKit 手机验证使用独立 CI job，不能复用 Chromium 结果或旧的非触屏 WebKit 报告代替。
+- 手机交互须验单指、双指及触点切换，不能以窄视口/鼠标/键盘替代。原生触摸输入、合成PointerEvent与真机分别报告；行内不截断页面滚动，全屏横竖切换须读取实际容器尺寸。
+- 当前 Chromium 原生触摸报告为14项；WebKit 触屏报告未生成时必须标为待验收，不得写成已通过。
+- 验证入口：`npm run build`、`git diff --exit-code -- dist`、`npm run check`、`npm test`、`npm run test:api`、`npm run test:api-types`、`npm run test:e2e`、WebKit `node test/webkit-mobile.mjs`，以及 package/runtime/coverage 校验脚本。
 - 过程和一次性结果写 `docs/` 或提交正文，规则文件不写进度。架构见 `docs/ARCHITECTURE.md`。
