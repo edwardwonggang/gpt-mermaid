@@ -316,6 +316,23 @@ js = replaceOnce(
   `    ).attr("class", "label-container").attr("stroke-linejoin", "round").attr("transform", "translate(" + -w4 / 2 + "," + h3 / 2 + ")");`
 );
 
+// 渲染时写出结构化身份。类图重新解析会递增 domId 计数，不能事后拆ID猜对应。
+js = replaceOnce(
+  js,
+  '节点保留语义ID',
+  `    newEl.attr("data-look", handleUndefinedAttr(node2.look));`,
+  `    newEl.attr("data-look", handleUndefinedAttr(node2.look));
+    newEl.attr("data-id", node2.id);`
+);
+js = replaceOnce(
+  js,
+  '连线保留源和目标',
+  `        svgPath.attr("data-id", edge.id);`,
+  `        svgPath.attr("data-id", edge.id);
+        svgPath.attr("data-source", edge.start);
+        svgPath.attr("data-target", edge.end);`
+);
+
 fs.mkdirSync(DIST_DIR, { recursive: true });
 const outJs = path.join(DIST_DIR, 'gpt-mermaid.runtime.js');
 fs.writeFileSync(outJs, js);

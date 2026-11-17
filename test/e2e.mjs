@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { verifyRenderingGeometry } from "./render-geometry.mjs";
 import { verifyLayoutQuality } from "./layout-quality.mjs";
+import { auditDetailOverlaps } from "./detail-overlaps.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 4173;
@@ -342,6 +343,9 @@ try {
   });
   assert(rawSizes[0].width > 6000 && rawSizes[1].height > 3000, "原布局对照丢失极端长宽输入");
   await verifyLayoutQuality(page, path.join(output, "playwright", "layout-after"));
+  const details = await auditDetailOverlaps(page, path.join(output, "playwright", "detail-audit"));
+  assert.equal(details.length, 100);
+  console.log(`细节验收：${details.length} 图，${details.reduce((sum, item) => sum + item.triangles, 0)} 个三角箭头，箭头/线杆/胶囊互遮断言通过`);
   await fs.writeFile(path.join(output, "playwright", "stress-report.json"), JSON.stringify(stress, null, 2));
   await page.locator("#family").selectOption("sequenceDiagram");
   assert((await page.locator(".sample:visible").count()) >= 10);

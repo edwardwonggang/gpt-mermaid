@@ -4,7 +4,7 @@ import { buildFlowchartThemeCSS, buildGlobalThemeCSS } from "./defaults.js";
 import { sanitizeMermaidSource, sanitizeSvgMarkup, svgSize } from "./sanitize.js";
 import { fixSvgLabels, placeEdgeLabels, sequenceAnchor } from "./svg-labels.js";
 import { trimArrowShafts } from "./svg-shaft.js";
-import { routeFlowEdges, fitSvgBounds } from "./svg-routing.js";
+import { routeFlowEdges, routeNativeEdges, nodeShape, fitSvgBounds } from "./svg-routing.js";
 import { routeC4Edges } from "./svg-c4.js";
 import { applyAdaptiveFlowLayout } from "./svg-adaptive.js";
 
@@ -256,9 +256,7 @@ function layoutPoints(edge) {
 
 function nodeOutlines(svg) {
   return [...svg.querySelectorAll("g.node, g.cluster")].map((node) => {
-    const container = node.querySelector(
-      ":scope > .label-container, :scope > .outer-path, :scope > rect, :scope > polygon, :scope > circle, :scope > ellipse, :scope > path"
-    );
+    const container = nodeShape(node);
     if (!container) return null;
     const shape = container instanceof SVGGeometryElement ? container : container.querySelector("path,rect,polygon,circle,ellipse");
     if (!shape || typeof shape.isPointInFill !== "function") return null;
@@ -519,10 +517,11 @@ function postProcessSvg(svgMarkup, variables, graph, config = {}) {
       routeFlowEdges(live, graph);
     }
     routeC4Edges(live, graph, variables);
+    routeNativeEdges(live);
     repairEdgeConnections(live);
     repairSequenceConnections(live);
     placeEdgeLabels(live);
-    if (graph) fitSvgBounds(live);
+    if (graph || Number(live.getAttribute("data-gptm-native-routes")) > 0) fitSvgBounds(live);
     colorDirectionalEdges(live, variables);
     const shafts = trimArrowShafts(live);
     live.setAttribute("data-gptm-trimmed-shafts", String(shafts.trimmed));

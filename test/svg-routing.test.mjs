@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { routeFlowEdges, readPoints, segmentBlocked, simplifyPoints, orthogonalRoute } from "../src/svg-routing.js";
+import { routeFlowEdges, routeNativeEdges, readPoints, segmentBlocked, simplifyPoints, orthogonalRoute } from "../src/svg-routing.js";
 
 function installGeometry(t) {
   const previous = Object.getOwnPropertyDescriptor(globalThis, "DOMPoint");
@@ -49,7 +49,7 @@ function fixture(spec) {
     getElementById: (id) => nodeElements.get(id),
     querySelectorAll: (selector) => selector.startsWith("path.flowchart-link") ? edges : [],
   };
-  return { svg, graph, edges };
+  return { svg, graph, edges, nodeElements };
 }
 
 function assertOrthogonal(points) {
@@ -143,4 +143,96 @@ test("双向箭头尺寸约束包含拥挤的源端", (t) => {
     assert(Number(edge.getAttribute("data-gptm-port-span")) <= 4.2 + 1e-6);
     assertOrthogonal(readPoints(edge));
   }
+});
+
+function nativeFixture(spec) {
+  const item = fixture(spec);
+  const nodes = [...item.nodeElements.values()];
+  nodes.forEach((node, index) => { node.dataset = { id: spec.nodes[index].id }; });
+  item.edges.forEach((edge, index) => {
+    const model = item.graph.edges[index];
+    edge.dataset.source = model.start;
+    edge.dataset.target = model.end;
+    edge.setAttribute("marker-end", model.markerEnd || "url(#svg-stateDiagram-barbEnd)");
+    if (model.markerStart) edge.setAttribute("marker-start", model.markerStart);
+    edge.setAttribute("d", model.points.map((p, i) => `${i ? "L" : "M"}${p.x},${p.y}`).join(" "));
+  });
+  item.svg.querySelectorAll = (selector) => {
+    if (selector === "g.node[data-id]") return nodes;
+    if (selector.startsWith("path.transition")) return item.edges;
+    return [];
+  };
+  return item;
+}
+
+test("原生路由按语义元数据绑定，不能拆边ID猜节点，并保留不兼容端点", (t) => {
+  installGeometry(t);
+  const item = nativeFixture({
+    nodes: [
+      { id: "源_A_1", box: { x: 0, y: 0, width: 40, height: 40 } },
+      { id: "目标_B_2", box: { x: 150, y: 0, width: 40, height: 40 } },
+    ],
+    edges: [
+      { id: "unrelated-edge-id", start: "源_A_1", end: "目标_B_2",
+        points: [{ x: 40, y: 20 }, { x: 150, y: 20 }] },
+      { id: "another-edge", start: "源_A_1", end: "目标_B_2",
+        markerStart: "url(#svg-classDiagram-aggregationStart)",
+        points: [{ x: 40, y: 30 }, { x: 150, y: 30 }] },
+    ],
+  });
+  const original = item.edges[1].getAttribute("d");
+  routeNativeEdges(item.svg);
+  for (const edge of item.edges) {
+    assert.equal(edge.getAttribute("data-gptm-source"), "svg-node-源_A_1");
+    assert.equal(edge.getAttribute("data-gptm-target"), "svg-node-目标_B_2");
+  }
+  assert.equal(item.edges[1].getAttribute("d"), original);
+  assert.equal(item.edges[1].getAttribute("marker-start"), "url(#svg-classDiagram-aggregationStart)");
+  assert(!item.edges[1].hasAttribute("data-gptm-native-rerouted"));
+});
+
+test("原生多边端口分离后仍保留每条逻辑边和箭头", (t) => {
+  installGeometry(t);
+  const item = nativeFixture({
+    nodes: [
+      { id: "A", box: { x: 0, y: 0, width: 40, height: 60 } },
+      { id: "B", box: { x: 160, y: 0, width: 40, height: 60 } },
+    ],
+    edges: Array.from({ length: 3 }, (_, index) => ({
+      id: `e${index}`, start: "A", end: "B",
+      points: [{ x: 40, y: 30 }, { x: 160, y: 30 }],
+    })),
+  });
+  routeNativeEdges(item.svg);
+  assert.equal(item.svg.getAttribute("data-gptm-native-routes"), "3");
+  const ports = item.edges.map((edge) => readPoints(edge)[0].y);
+  assert.equal(new Set(ports).size, 3);
+  for (const edge of item.edges) {
+    assert.equal(edge.getAttribute("marker-end"), "url(#svg-stateDiagram-barbEnd)");
+    assertOrthogonal(readPoints(edge));
+    assert(Number(edge.getAttribute("data-gptm-port-span")) <= 18);
+  }
+});
+
+test("原生端口的短引线也不能穿过非目标节点", (t) => {
+  installGeometry(t);
+  const obstacle = { x: 48, y: 10, width: 4, height: 20, right: 52, bottom: 30 };
+  const item = nativeFixture({
+    nodes: [
+      { id: "A", box: { x: 0, y: 0, width: 40, height: 40 } },
+      { id: "B", box: { x: 120, y: 0, width: 40, height: 40 } },
+      { id: "O", box: obstacle },
+    ],
+    edges: [{
+      id: "safe-original", start: "A", end: "B",
+      points: [{ x: 40, y: 20 }, { x: 44, y: 20 }, { x: 44, y: -10 },
+        { x: 96, y: -10 }, { x: 96, y: 20 }, { x: 120, y: 20 }],
+    }],
+  });
+  const before = readPoints(item.edges[0]);
+  assert(before.slice(1).every((p, i) => !segmentBlocked(before[i], p, [obstacle])));
+  routeNativeEdges(item.svg);
+  const points = readPoints(item.edges[0]);
+  assert(points.slice(1).every((p, i) => !segmentBlocked(points[i], p, [obstacle])),
+    `完整新路径穿过非目标节点 O: ${JSON.stringify(points)}`);
 });

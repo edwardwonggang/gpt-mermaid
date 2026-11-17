@@ -7,7 +7,7 @@ export async function verifyLayoutQuality(page, output) {
   await fs.mkdir(output, { recursive: true });
   const report = await page.evaluate(async () => {
     const selected = [...new Map([...GPT_MERMAID_LAB_CASES, ...GPT_MERMAID_STRESS_CASES]
-      .filter((s) => s.type === "flowchart" || s.type === "C4Context").map((s) => [s.id, s])).values()];
+      .filter((s) => ["flowchart", "C4Context", "stateDiagram-v2", "classDiagram"].includes(s.type)).map((s) => [s.id, s])).values()];
     const results = [];
     for (const item of selected) {
       const result = await GPTMermaid.renderSvg(item.source);

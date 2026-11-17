@@ -63,13 +63,37 @@ export function placeEdgeLabels(svg) {
   const paths = new Map([...svg.querySelectorAll("[data-id]")].filter((p) => p instanceof SVGGeometryElement)
     .map((p) => [p.dataset.id, p]));
   const nodes = [...svg.querySelectorAll("g.node > .label-container, g.node > .outer-path")].map((n) => boundsInSvg(svg, n));
+  const lines = [...paths.values()].map((edge) => {
+    const length = edge.getTotalLength(), steps = Math.min(2000, Math.max(2, Math.ceil(length / 3)));
+    const points = Array.from({ length: steps + 1 }, (_, i) => inSvg(svg, edge, edge.getPointAtLength(length * i / steps)));
+    return { edge, points };
+  });
   const occupied = [];
-  for (const label of svg.querySelectorAll("g.edgeLabel")) {
+  const labels = [...svg.querySelectorAll("g.edgeLabel")];
+  const available = (label) => {
+    const id = label.querySelector("[data-id]")?.dataset.id || label.dataset.id, edge = paths.get(id);
+    if (!edge) return Infinity;
+    if (edge.hasAttribute("data-gptm-label-x")) return -Infinity;
+    const box = boundsInSvg(svg, label);
+    return edge.getTotalLength() - Math.max(box.width, box.height);
+  };
+  // 先放固定通道与空间最紧的短边标签，避免长边抢占唯一可行位置。
+  const space = new Map(labels.map((label) => [label, available(label)]));
+  labels.sort((a, b) => space.get(a) - space.get(b));
+  for (const label of labels) {
     const id = label.querySelector("[data-id]")?.dataset.id || label.dataset.id;
     const edge = paths.get(id);
     if (!edge) continue;
     const box = boundsInSvg(svg, label), old = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
     if (box.width === 0 || box.height === 0) continue;
+    if (edge.hasAttribute("data-gptm-label-x") && edge.hasAttribute("data-gptm-label-y")) {
+      const target = { x: Number(edge.getAttribute("data-gptm-label-x")), y: Number(edge.getAttribute("data-gptm-label-y")) };
+      const before = fromSvg(svg, label.parentElement, old), after = fromSvg(svg, label.parentElement, target);
+      shift(label, after.x - before.x, after.y - before.y);
+      label.setAttribute("data-gptm-label-edge", edge.id);
+      occupied.push({ x: target.x - box.width / 2, y: target.y - box.height / 2, right: target.x + box.width / 2, bottom: target.y + box.height / 2 });
+      continue;
+    }
     const length = edge.getTotalLength(), candidates = [];
     if (!Number.isFinite(length) || length < 1) continue;
     const add = (offset) => {
@@ -80,9 +104,12 @@ export function placeEdgeLabels(svg) {
       const b = inSvg(svg, edge, edge.getPointAtLength(Math.min(length, offset + 4)));
       const diagonal = Math.min(Math.abs(b.x - a.x), Math.abs(b.y - a.y));
       const collision = [...nodes, ...occupied].filter((n) => overlaps(proposed, n)).length;
+      const foreign = lines.filter((line) => line.edge !== edge
+        && line.points.some((p) => p.x > proposed.x - 2 && p.x < proposed.right + 2
+          && p.y > proposed.y - 2 && p.y < proposed.bottom + 2)).length;
       // 端点附近必须给箭头留空间；优先保留原标签所在段而非挪到另一条分支。
       const nearEnd = Math.min(offset, length - offset) < Math.max(box.width, box.height) / 2 + 16;
-      candidates.push({ point, proposed, score: collision * 1e6 + (nearEnd ? 1e4 : 0)
+      candidates.push({ point, proposed, score: collision * 1e6 + foreign * 1e5 + (nearEnd ? 1e4 : 0)
         + diagonal * 20 + Math.hypot(point.x - old.x, point.y - old.y) });
     };
     const steps = Math.min(1000, Math.max(20, Math.ceil(length / 5)));
