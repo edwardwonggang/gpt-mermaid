@@ -16,6 +16,7 @@ import {
 } from "./runtime-guard.js";
 import { loadRuntime } from "./runtime-loader.js";
 import { layoutStateSvg } from "./state-svg.js";
+import { runtimeLayoutOptions } from "./layout-style.js";
 
 const FLOWCHART_RE = /^\s*(?:flowchart|graph)\b/im;
 // Mermaid 的 frontmatter 必须是文档首部独立的 `---` 行；不能把 YAML
@@ -612,11 +613,8 @@ export function createRenderer(baseUrl = globalThis.document?.baseURI) {
 
   function initialize(mermaid, config, flowchart, stateDiagram) {
     const layout = flowchart ? "elk" : "dagre";
-    const nextKey = JSON.stringify({ preset: config.preset, themeVariables: config.themeVariables,
-      isDark: config.isDark, layout, state: stateDiagram ? "wide" : "default" });
     const state = runtimeState(mermaid);
-    if (state.configKey === nextKey) return;
-    mermaid.initialize({
+    const initialization={
       startOnLoad: false,
       securityLevel: "strict",
       suppressErrorRendering: true,
@@ -641,9 +639,7 @@ export function createRenderer(baseUrl = globalThis.document?.baseURI) {
       class: { useMaxWidth: false },
       // 状态图默认 wrappingWidth 约 120，会把 WAIT_CONDITION 这类状态名
       // 强行拆行；放宽到 360 后由节点宽度自然决定是否换行。
-      state: stateDiagram
-        ? { useMaxWidth: false, wrappingWidth: 360, nodeSpacing: 140, rankSpacing: 90 }
-        : { useMaxWidth: false, wrappingWidth: 360 },
+      ...runtimeLayoutOptions(flowchart,stateDiagram),
       er: { useMaxWidth: false },
       pie: { useMaxWidth: false },
       quadrantChart: { useMaxWidth: false },
@@ -659,7 +655,11 @@ export function createRenderer(baseUrl = globalThis.document?.baseURI) {
       packet: { useMaxWidth: false },
       architecture: { useMaxWidth: false },
       radar: { useMaxWidth: false },
-    });
+    };
+    // 测量字体/图种/布局变化必须触发初始化；缓存与执行共用同一个完整参数对象。
+    const nextKey=JSON.stringify(initialization);
+    if(state.configKey===nextKey)return;
+    mermaid.initialize(initialization);
     state.configKey = nextKey;
   }
 

@@ -25,7 +25,9 @@ export function createGPTMermaid(globalObject, baseUrl) {
   function configure(next = {}) {
     config = resolveConfig(next, config);
     if (globalObject.document) injectStyles(globalObject.document, config.autoInjectStyles);
-    return { ...config, themeVariables: { ...config.themeVariables } };
+    // 返回可独立持有且保留显式覆盖来源的快照；普通spread会使恢复快照把
+    // 全部派生默认值当成用户覆盖，之后字体/preset再也切不过去。
+    return resolveConfig({}, config);
   }
 
   async function renderSvg(source, options = {}) {

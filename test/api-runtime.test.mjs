@@ -50,6 +50,61 @@ test("real ESM default API exposes load and preloads the renderer's exact runtim
   assert.equal(requests.length, 2, "renderSvg must reuse the preloaded runtime");
 });
 
+test("公开 API 的连续配置和单次覆盖正确传到 runtime 初始化", async (t) => {
+  const { requests } = installRuntimeDocument(t);
+  const source = await bundle("esm-entry.js", "esm");
+  // 隔离模块级全局配置；仍消费真实入口，不复用其它测试 configure 留下的状态。
+  const { default: api } = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}#style-config`);
+  const initialized = [];
+  const reachedRuntime = new Error("已抵达真实初始化后的执行边界");
+  const runtime = {
+    initialize(config) { initialized.push(config); },
+    async render() { throw reachedRuntime; },
+  };
+  async function render(options) {
+    // 仅替代第三方绘图；factory、配置合并、初始化与缓存均执行真实源码。
+    await assert.rejects(api.renderSvg("flowchart LR\nA-->B", options), (error) => error === reachedRuntime);
+    return initialized.at(-1);
+  }
+
+  api.configure({ runtime, autoInjectStyles: false, themeVariables: { primaryColor: "#123456" } });
+  api.configure({ preset: "tokyo", fontFamily: "Georgia, serif" });
+  const global = await render();
+  assert.equal(global.themeVariables.primaryColor, "#123456");
+  assert.equal(global.themeVariables.flowchartNodeColor, api.presets.tokyo.node);
+  assert.equal(global.fontFamily, "Georgia, serif");
+  assert.equal(global.themeVariables.fontFamily, "Georgia, serif");
+
+  const once = await render({
+    preset: "github",
+    fontFamily: "Arial, sans-serif",
+    themeVariables: { primaryColor: "#abcdef", fontSize: "18px" },
+  });
+  assert.equal(once.themeVariables.primaryColor, "#abcdef");
+  assert.equal(once.themeVariables.flowchartNodeColor, api.presets.github.node);
+  assert.equal(once.themeVariables.fontFamily, "Arial, sans-serif");
+  assert.equal(once.themeVariables.fontSize, "18px");
+  assert.deepEqual(await render(), global, "单次覆盖与执行失败不能污染全局配置");
+  assert.equal(initialized.length, 3);
+  await render();
+  assert.equal(initialized.length, 3, "相同有效配置仍复用初始化缓存");
+
+  api.configure({ preset: "gpt", fontFamily: "Courier New, monospace" });
+  const reset = await render();
+  assert.equal(reset.themeVariables.flowchartNodeColor, api.presets.gpt.node);
+  assert.equal(reset.themeVariables.primaryColor, "#123456");
+  assert.equal(reset.themeVariables.fontFamily, "Courier New, monospace");
+  assert.equal(reset.themeVariables.fontSize, "14px");
+  assert.equal(initialized.length, 4);
+  const snapshot=api.configure({preset:"gpt"});
+  api.configure({preset:"tokyo",fontFamily:"Georgia, serif"});
+  api.configure(snapshot);
+  const afterRestore=await render({fontFamily:"Arial, sans-serif"});
+  assert.equal(afterRestore.themeVariables.fontFamily,"Arial, sans-serif","公开快照往返不能锁住派生字体");
+  assert.equal(afterRestore.themeVariables.primaryColor,"#123456","快照恢复仍保留显式覆盖");
+  assert.equal(requests.length, 0, "显式注入 runtime 的验证不访问网络");
+});
+
 for (const [entry, format] of [["cjs-entry.cjs", "cjs"], ["umd-entry.js", "iife"]]) {
   test(`real ${format} API loads the shipped runtime bytes without adopting foreign Mermaid`, async () => {
     const source = await bundle(entry, format);

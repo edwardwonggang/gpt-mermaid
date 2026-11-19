@@ -2,10 +2,11 @@
  * 调用方：state-model、state-constraints；依赖：实测节点尺寸与形状能力。
  * 红线：不同连接端不能合用port；只增大框，不缩放文字；圆/菱形只使用合法轴向极点。
  */
+import { READING_LAYOUT } from "./layout-style.js";
 export const STATE_PORT_SIDES = ["NORTH", "EAST", "SOUTH", "WEST"];
 export const STATE_PORT_GAP = 18;
-export const STATE_CORNER_RADIUS = 4;
-export const STATE_VISIBLE_LEAD = 16;
+export const STATE_CORNER_RADIUS = READING_LAYOUT.cornerRadius;
+export const STATE_VISIBLE_LEAD = READING_LAYOUT.visibleLead;
 // 圆角切入4 + 描边余量1；目标另预留实际箭头，保证真实可见线杆至少16。
 export const statePortLead = (arrow, depth = 11) => STATE_VISIBLE_LEAD + STATE_CORNER_RADIUS + 1 + (arrow ? depth : 0);
 export const stateCardinalOnly = n => /^(stateStart|stateEnd|choice|choiceState)$/.test(n.shape);

@@ -5,6 +5,8 @@
 import { validateStateLayout } from "./state-constraints.js";
 import { allocateStatePorts, STATE_PORT_SIDES as SIDES, stateSidePoint as center,
   statePortLead, stateCardinalOnly } from "./state-ports.js";
+import { READING_LAYOUT, stateReadingMetrics } from "./layout-style.js";
+import { compactStateSpacing } from "./state-spacing.js";
 export const STATE_LAYOUT_LEAD = statePortLead(false);
 export function expandModel(input) {
   const order = [], visited = new Set(), active = new Set(), feedbackEdges = new Set();
@@ -45,12 +47,14 @@ const options = {
   "elk.randomSeed": "1",
   "elk.layered.cycleBreaking.strategy": "MODEL_ORDER",
   "elk.layered.feedbackEdges": "true",
-  "elk.spacing.nodeNode": "20",
-  "elk.layered.spacing.nodeNodeBetweenLayers": "3",
-  "elk.spacing.edgeNode": "10",
-  "elk.layered.spacing.edgeNodeBetweenLayers": "3",
-  "elk.spacing.edgeEdge": "16",
-  "elk.layered.spacing.edgeEdgeBetweenLayers": "16",
+  "elk.layered.nodePlacement.strategy": READING_LAYOUT.placement,
+  "elk.layered.nodePlacement.bk.fixedAlignment": READING_LAYOUT.alignment,
+  "elk.spacing.nodeNode": String(READING_LAYOUT.nodeGap),
+  "elk.layered.spacing.nodeNodeBetweenLayers": String(READING_LAYOUT.stateLayerGap),
+  "elk.spacing.edgeNode": String(READING_LAYOUT.edgeClearance),
+  "elk.layered.spacing.edgeNodeBetweenLayers": String(READING_LAYOUT.stateLayerGap),
+  "elk.spacing.edgeEdge": String(READING_LAYOUT.laneGap),
+  "elk.layered.spacing.edgeEdgeBetweenLayers": String(READING_LAYOUT.laneGap),
 };
 function graphFor(model, allocation, direction) {
   return {
@@ -163,7 +167,12 @@ export async function solveStateScope(input, direction, layout) {
       port(nodes.get(m.source), `${m.id}:source`), ...route, port(nodes.get(m.target), `${m.id}:target`),
     ] };
   });
-  return { width: fixed.width, height: fixed.height, nodes: [...nodes.values()], segments, edges: input.edges, sides:selected };
+  const result={ width: fixed.width, height: fixed.height, nodes: [...nodes.values()], segments, edges: input.edges, sides:selected };
+  const compact=compactStateSpacing(result,direction);
+  // 压缩仍接受同一只读硬约束；不合格候选不替代原始可行几何。
+  const compactReport=validateStateLayout(compact);
+  const accepted=compactReport.accepted;
+  return accepted?compact:result;
   };
   let best = await candidateFor(structuredClone(sides),1), quality = validateStateLayout(best);
   const lanePenalty = result => feedback.reduce((sum,e)=>{
@@ -174,7 +183,8 @@ export async function solveStateScope(input, direction, layout) {
     return sum + (Math.sign(cross(label)-(cross(a)+cross(b))/2) === channelSide.get(e.id) ? 0:1);
   },0);
   const score = (result, report) => [report.issues.length, report.intersections.length,
-    lanePenalty(result), result.width*result.height, result.segments.reduce((sum,e)=>sum+e.points.length,0)];
+    lanePenalty(result), stateReadingMetrics(result,direction).readingCost,
+    result.width*result.height, result.segments.reduce((sum,e)=>sum+e.points.length,0)];
   const better = (a,b) => a.some((v,i)=>v<b[i]&&a.slice(0,i).every((x,j)=>x===b[j]));
   let bestScore = score(best, quality);
   // 有限整体候选：变更的是环路/反馈通道方向，全部几何重新求解并验收，不修改成品路径。
@@ -198,5 +208,5 @@ export async function solveStateScope(input, direction, layout) {
     const next = score(result,report);
     if (better(next,bestScore)) { best=result;bestScore=next; }
   }
-  return best;
+  return {...best,reading:stateReadingMetrics(best,direction)};
 }

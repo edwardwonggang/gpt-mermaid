@@ -11,6 +11,7 @@ import { verifyPracticalVariants } from "./practical-variants.mjs";
 import { verifyTouchGestures } from "./touch-gestures.mjs";
 import { BASE_GEOMETRY_EXPECTATIONS } from "./geometry-expectations.mjs";
 import { verifyStateIndependentVariants } from "./state-independent-variants.mjs";
+import { verifyStyleRuntime } from "./style-runtime-browser.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."), port = 4175;
 const output = path.join(root, "output/playwright/webkit");
@@ -37,6 +38,7 @@ try {
       .map(r => ({ id: r.figure.closest(".sample").dataset.sampleId, ...r.result.routing })),
   }));
   assert.equal(summary.width, 390); assert.equal(summary.ready, 100); assert.deepEqual(summary.unexpected, []);
+  await fs.writeFile(path.join(output,"style-runtime-browser.json"),JSON.stringify(await verifyStyleRuntime(page),null,2));
   await auditArrowContacts(page, output, true, BASE_GEOMETRY_EXPECTATIONS);
   await auditDetailOverlaps(page, output, true, BASE_GEOMETRY_EXPECTATIONS);
   const variants = await verifyPracticalVariants(page, path.join(output, "variants"));

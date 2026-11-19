@@ -82,6 +82,7 @@
     adaptiveLayout: Object.freeze({ enabled: true, maxWidth: 1200, maxHeight: 1e3, gap: 80 })
   });
   var SERIES = ["#339cff", "#f3883b", "#5dc977", "#eb77b1", "#9b79ec", "#3ab9b1"];
+  var EXPLICIT_THEME_OVERRIDES = /* @__PURE__ */ new WeakMap();
   function resolveConfig(input = {}, previous = DEFAULT_CONFIG) {
     const presetName = input.preset || previous.preset || "gpt";
     const preset = PRESETS[presetName] || PRESETS.gpt;
@@ -178,6 +179,12 @@
       ...pie,
       ...git
     };
+    const explicitVariables = {
+      ...EXPLICIT_THEME_OVERRIDES.get(previous.themeVariables) || previous.themeVariables || {},
+      ...EXPLICIT_THEME_OVERRIDES.get(input.themeVariables) || input.themeVariables || {}
+    };
+    const themeVariables = { ...variables, ...explicitVariables };
+    EXPLICIT_THEME_OVERRIDES.set(themeVariables, explicitVariables);
     return {
       ...DEFAULT_CONFIG,
       ...previous,
@@ -185,7 +192,7 @@
       preset: presetName,
       fontFamily,
       adaptiveLayout: input.adaptiveLayout === false || input.adaptiveLayout === void 0 && previous.adaptiveLayout === false ? false : { ...DEFAULT_CONFIG.adaptiveLayout, ...previous.adaptiveLayout || {}, ...input.adaptiveLayout || {} },
-      themeVariables: { ...variables, ...previous.themeVariables || {}, ...input.themeVariables || {} },
+      themeVariables,
       isDark
     };
   }
@@ -4179,11 +4186,76 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     }
   }
 
+  // src/layout-style.js
+  var READING_LAYOUT = Object.freeze({
+    id: "balanced-reading-v1",
+    nodeGap: 20,
+    stateLayerGap: 3,
+    edgeClearance: 10,
+    laneGap: 16,
+    visibleLead: 16,
+    cornerRadius: 4,
+    placement: "BRANDES_KOEPF",
+    alignment: "BALANCED",
+    readingWeights: Object.freeze({ branchBalance: 0.6, terminalProximity: 0.8 })
+  });
+  function runtimeLayoutOptions(flowchart, stateDiagram) {
+    return {
+      // 流程关系采用均衡分支。时间轴、类成员、ER基数、统计坐标使用原图种的结构规则。
+      ...flowchart ? { elk: {
+        nodePlacementStrategy: READING_LAYOUT.placement,
+        nodePlacementAlignment: READING_LAYOUT.alignment,
+        mergeEdges: false
+      } } : {},
+      state: {
+        useMaxWidth: false,
+        wrappingWidth: 360,
+        ...stateDiagram ? { nodeSpacing: READING_LAYOUT.nodeGap, rankSpacing: 50 } : {}
+      }
+    };
+  }
+  function stateReadingMetrics(model, direction) {
+    const vertical = !["LEFT", "RIGHT"].includes(direction);
+    const cross2 = (n) => vertical ? n.x + n.width / 2 : n.y + n.height / 2;
+    const nodes = new Map(model.nodes.filter((n) => n.kind === "state").map((n) => [n.id, n]));
+    const feedback = new Set(model.segments.filter((e) => e.feedback || e.loop).map((e) => e.owner));
+    const edges = model.edges.filter((e) => !feedback.has(e.id) && nodes.has(e.source) && nodes.has(e.target));
+    const units = [...nodes.values()].map((n) => vertical ? n.width : n.height).sort((a, b) => a - b);
+    const unit = Math.max(1, units[Math.floor(units.length / 2)] || 1);
+    const outgoing = new Map([...nodes.keys()].map((id) => [id, edges.filter((e) => e.source === id)]));
+    const incoming = new Map([...nodes.keys()].map((id) => [id, edges.filter((e) => e.target === id)]));
+    const mean = (list) => list.reduce((a, b) => a + b, 0) / Math.max(1, list.length);
+    const branchImbalance = mean([...nodes.keys()].flatMap((id) => {
+      const next = outgoing.get(id);
+      return next.length > 1 ? [Math.abs(cross2(nodes.get(id)) - mean(next.map((e) => cross2(nodes.get(e.target))))) / unit] : [];
+    }));
+    const memo = /* @__PURE__ */ new Map(), active = /* @__PURE__ */ new Set();
+    const depth = (id) => {
+      if (memo.has(id)) return memo.get(id);
+      if (active.has(id)) return 0;
+      active.add(id);
+      const value = 1 + Math.max(0, ...outgoing.get(id).map((e) => depth(e.target)));
+      active.delete(id);
+      memo.set(id, value);
+      return value;
+    };
+    const longest = edges.filter((e) => depth(e.source) === depth(e.target) + 1);
+    const lateralTravel = mean(longest.map((e) => Math.abs(cross2(nodes.get(e.source)) - cross2(nodes.get(e.target))) / unit));
+    const terminals = [...nodes.keys()].filter((id) => outgoing.get(id).length === 0 && incoming.get(id).length);
+    const terminalDrift = mean(terminals.map((id) => Math.abs(cross2(nodes.get(id)) - mean(incoming.get(id).map((e) => cross2(nodes.get(e.source))))) / unit));
+    return {
+      lateralTravel,
+      branchImbalance,
+      terminalDrift,
+      readingCost: lateralTravel + branchImbalance * READING_LAYOUT.readingWeights.branchBalance + terminalDrift * READING_LAYOUT.readingWeights.terminalProximity
+    };
+  }
+
   // src/state-ports.js
   var STATE_PORT_SIDES = ["NORTH", "EAST", "SOUTH", "WEST"];
   var STATE_PORT_GAP = 18;
-  var STATE_CORNER_RADIUS = 4;
-  var STATE_VISIBLE_LEAD = 16;
+  var STATE_CORNER_RADIUS = READING_LAYOUT.cornerRadius;
+  var STATE_VISIBLE_LEAD = READING_LAYOUT.visibleLead;
   var statePortLead = (arrow, depth = 11) => STATE_VISIBLE_LEAD + STATE_CORNER_RADIUS + 1 + (arrow ? depth : 0);
   var stateCardinalOnly = (n) => /^(stateStart|stateEnd|choice|choiceState)$/.test(n.shape);
   function stateSidePoint(n, side, offset = 0) {
@@ -4421,6 +4493,87 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     };
   }
 
+  // src/state-spacing.js
+  function compactStateSpacing(model, direction) {
+    const axis = ["LEFT", "RIGHT"].includes(direction) ? "x" : "y", other = axis === "x" ? "y" : "x";
+    const dimension = axis === "x" ? "width" : "height", breadth = axis === "x" ? "height" : "width";
+    const segments2 = model.segments.map((e) => ({ ...e, points: simplifyPoints(e.points) }));
+    const boxes = model.nodes.map((n) => ({
+      node: n,
+      start: n[axis] - (n.envelope?.[axis === "x" ? "dx" : "dy"] || 0),
+      size: n.envelope?.[dimension] || n[dimension],
+      cross: n[other] - (n.envelope?.[axis === "x" ? "dy" : "dx"] || 0),
+      breadth: n.envelope?.[breadth] || n[breadth]
+    }));
+    const key = (v) => Math.round(v * 1e6) / 1e6;
+    const stations = [...new Set([
+      0,
+      model[dimension],
+      ...boxes.flatMap((b) => [b.start, b.start + b.size]),
+      ...model.nodes.flatMap((n) => [n[axis], n[axis] + n[dimension]]),
+      ...segments2.flatMap((e) => e.points.map((p) => p[axis]))
+    ].map(key))].sort((a, b) => a - b);
+    const indices = new Map(stations.map((v, i) => [v, i])), requirements = stations.map(() => []);
+    const requireGap = (a, b, gap) => {
+      if (b < a) [a, b] = [b, a];
+      const i = indices.get(key(a)), j = indices.get(key(b));
+      if (i !== void 0 && j > i) requirements[j].push([i, Math.min(gap, stations[j] - stations[i])]);
+    };
+    const groupOf = [0], groupStarts = [stations[0]], offsets = [0];
+    for (let i = 1; i < stations.length; i++) {
+      const a = stations[i - 1], b = stations[i];
+      const locked = boxes.some((n) => a < n.start + n.size - 1e-5 && b > n.start + 1e-5);
+      if (!locked) groupStarts.push(b);
+      groupOf[i] = groupStarts.length - 1;
+      offsets[i] = b - groupStarts.at(-1);
+      requirements[i].push([i - 1, locked ? b - a : Math.min(0.01, b - a)]);
+    }
+    const byId = new Map(model.nodes.map((n) => [n.id, n])), transverse = [];
+    for (const edge of segments2) {
+      for (let i = 1; i < edge.points.length; i++) {
+        const a = edge.points[i - 1], b = edge.points[i];
+        if (Math.abs(a[axis] - b[axis]) > 1e-3) {
+          let gap = READING_LAYOUT.edgeClearance + 2 * READING_LAYOUT.cornerRadius;
+          if (i === 1) gap = Math.max(gap, statePortLead(false, byId.get(edge.source).arrowDepth));
+          if (i === edge.points.length - 1) gap = Math.max(gap, statePortLead(edge.arrow, byId.get(edge.target).arrowDepth));
+          requireGap(a[axis], b[axis], gap);
+        } else transverse.push({ at: a[axis], lo: Math.min(a[other], b[other]), hi: Math.max(a[other], b[other]), owner: edge.owner });
+      }
+    }
+    for (const a of boxes) for (const b of boxes) {
+      if (a.start + a.size <= b.start + 1e-3 && a.cross < b.cross + b.breadth && b.cross < a.cross + a.breadth)
+        requireGap(a.start + a.size, b.start, READING_LAYOUT.edgeClearance);
+    }
+    for (const line of transverse) {
+      for (const b of boxes) if (line.lo < b.cross + b.breadth && line.hi > b.cross) {
+        if (line.at < b.start) requireGap(line.at, b.start, READING_LAYOUT.edgeClearance);
+        else if (line.at > b.start + b.size) requireGap(b.start + b.size, line.at, READING_LAYOUT.edgeClearance);
+      }
+      for (const otherLine of transverse) if (line.owner !== otherLine.owner && line.at < otherLine.at && line.lo < otherLine.hi && otherLine.lo < line.hi) requireGap(line.at, otherLine.at, READING_LAYOUT.laneGap);
+    }
+    const groupRequirements = groupStarts.map(() => []);
+    for (let j = 1; j < stations.length; j++) for (const [i, gap] of requirements[j])
+      if (groupOf[i] !== groupOf[j]) groupRequirements[groupOf[j]].push([groupOf[i], gap + offsets[i] - offsets[j]]);
+    const bases = [stations[0]];
+    for (let j = 1; j < groupStarts.length; j++) bases[j] = Math.max(...groupRequirements[j].map(([i, gap]) => bases[i] + gap));
+    const positions = stations.map((_, i) => key(bases[groupOf[i]] + offsets[i]));
+    const mapped = (value) => {
+      const exact = indices.get(key(value));
+      if (exact !== void 0) return positions[exact];
+      const upper = stations.findIndex((v) => v > value);
+      if (upper < 1) return value + (positions.at(-1) - stations.at(-1));
+      const low = upper - 1, t = (value - stations[low]) / (stations[upper] - stations[low]);
+      return positions[low] + t * (positions[upper] - positions[low]);
+    };
+    return {
+      ...model,
+      [dimension]: mapped(model[dimension]),
+      nodes: model.nodes.map((n) => ({ ...n, [axis]: mapped(n[axis]) })),
+      segments: segments2.map((e) => ({ ...e, points: e.points.map((p) => ({ ...p, [axis]: mapped(p[axis]) })) })),
+      spacing: { axis, before: model[dimension], after: mapped(model[dimension]) }
+    };
+  }
+
   // src/state-model.js
   var STATE_LAYOUT_LEAD = statePortLead(false);
   function expandModel(input) {
@@ -4464,12 +4617,14 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     "elk.randomSeed": "1",
     "elk.layered.cycleBreaking.strategy": "MODEL_ORDER",
     "elk.layered.feedbackEdges": "true",
-    "elk.spacing.nodeNode": "20",
-    "elk.layered.spacing.nodeNodeBetweenLayers": "3",
-    "elk.spacing.edgeNode": "10",
-    "elk.layered.spacing.edgeNodeBetweenLayers": "3",
-    "elk.spacing.edgeEdge": "16",
-    "elk.layered.spacing.edgeEdgeBetweenLayers": "16"
+    "elk.layered.nodePlacement.strategy": READING_LAYOUT.placement,
+    "elk.layered.nodePlacement.bk.fixedAlignment": READING_LAYOUT.alignment,
+    "elk.spacing.nodeNode": String(READING_LAYOUT.nodeGap),
+    "elk.layered.spacing.nodeNodeBetweenLayers": String(READING_LAYOUT.stateLayerGap),
+    "elk.spacing.edgeNode": String(READING_LAYOUT.edgeClearance),
+    "elk.layered.spacing.edgeNodeBetweenLayers": String(READING_LAYOUT.stateLayerGap),
+    "elk.spacing.edgeEdge": String(READING_LAYOUT.laneGap),
+    "elk.layered.spacing.edgeEdgeBetweenLayers": String(READING_LAYOUT.laneGap)
   };
   function graphFor(model, allocation, direction) {
     return {
@@ -4595,7 +4750,11 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
           port(nodes.get(m.target), `${m.id}:target`)
         ] };
       });
-      return { width: fixed.width, height: fixed.height, nodes: [...nodes.values()], segments: segments2, edges: input.edges, sides: selected };
+      const result = { width: fixed.width, height: fixed.height, nodes: [...nodes.values()], segments: segments2, edges: input.edges, sides: selected };
+      const compact = compactStateSpacing(result, direction);
+      const compactReport = validateStateLayout(compact);
+      const accepted = compactReport.accepted;
+      return accepted ? compact : result;
     };
     let best = await candidateFor(structuredClone(sides), 1), quality = validateStateLayout(best);
     const lanePenalty = (result) => feedback.reduce((sum, e) => {
@@ -4609,6 +4768,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       report.issues.length,
       report.intersections.length,
       lanePenalty(result),
+      stateReadingMetrics(result, direction).readingCost,
       result.width * result.height,
       result.segments.reduce((sum, e) => sum + e.points.length, 0)
     ];
@@ -4636,7 +4796,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         bestScore = next;
       }
     }
-    return best;
+    return { ...best, reading: stateReadingMetrics(best, direction) };
   }
 
   // src/state-layout.js
@@ -5461,16 +5621,8 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     }
     function initialize(mermaid, config, flowchart, stateDiagram) {
       const layout = flowchart ? "elk" : "dagre";
-      const nextKey = JSON.stringify({
-        preset: config.preset,
-        themeVariables: config.themeVariables,
-        isDark: config.isDark,
-        layout,
-        state: stateDiagram ? "wide" : "default"
-      });
       const state = runtimeState(mermaid);
-      if (state.configKey === nextKey) return;
-      mermaid.initialize({
+      const initialization = {
         startOnLoad: false,
         securityLevel: "strict",
         suppressErrorRendering: true,
@@ -5495,7 +5647,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         class: { useMaxWidth: false },
         // 状态图默认 wrappingWidth 约 120，会把 WAIT_CONDITION 这类状态名
         // 强行拆行；放宽到 360 后由节点宽度自然决定是否换行。
-        state: stateDiagram ? { useMaxWidth: false, wrappingWidth: 360, nodeSpacing: 140, rankSpacing: 90 } : { useMaxWidth: false, wrappingWidth: 360 },
+        ...runtimeLayoutOptions(flowchart, stateDiagram),
         er: { useMaxWidth: false },
         pie: { useMaxWidth: false },
         quadrantChart: { useMaxWidth: false },
@@ -5511,7 +5663,10 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         packet: { useMaxWidth: false },
         architecture: { useMaxWidth: false },
         radar: { useMaxWidth: false }
-      });
+      };
+      const nextKey = JSON.stringify(initialization);
+      if (state.configKey === nextKey) return;
+      mermaid.initialize(initialization);
       state.configKey = nextKey;
     }
     async function renderSvg(rawSource, config = {}) {
@@ -6501,7 +6656,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     function configure(next = {}) {
       config = resolveConfig(next, config);
       if (globalObject.document) injectStyles(globalObject.document, config.autoInjectStyles);
-      return { ...config, themeVariables: { ...config.themeVariables } };
+      return resolveConfig({}, config);
     }
     async function renderSvg(source, options2 = {}) {
       const effective = resolveConfig(options2, config);

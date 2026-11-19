@@ -85,6 +85,10 @@ export const DEFAULT_CONFIG = Object.freeze({
 
 const SERIES = ["#339cff", "#f3883b", "#5dc977", "#eb77b1", "#9b79ec", "#3ab9b1"];
 
+// factory/UI 会浅拷贝配置，故来源跟随主题对象身份，不给公共配置添加字段。
+// 只继承显式覆盖：旧派生值会锁住新 preset/字体；显式值即使等于默认值也必须保留。
+const EXPLICIT_THEME_OVERRIDES = new WeakMap();
+
 export function resolveConfig(input = {}, previous = DEFAULT_CONFIG) {
   const presetName = input.preset || previous.preset || "gpt";
   const preset = PRESETS[presetName] || PRESETS.gpt;
@@ -174,6 +178,12 @@ export function resolveConfig(input = {}, previous = DEFAULT_CONFIG) {
     ...pie,
     ...git,
   };
+  const explicitVariables = {
+    ...(EXPLICIT_THEME_OVERRIDES.get(previous.themeVariables) || previous.themeVariables || {}),
+    ...(EXPLICIT_THEME_OVERRIDES.get(input.themeVariables) || input.themeVariables || {}),
+  };
+  const themeVariables = { ...variables, ...explicitVariables };
+  EXPLICIT_THEME_OVERRIDES.set(themeVariables, explicitVariables);
   return {
     ...DEFAULT_CONFIG,
     ...previous,
@@ -182,7 +192,7 @@ export function resolveConfig(input = {}, previous = DEFAULT_CONFIG) {
     fontFamily,
     adaptiveLayout: input.adaptiveLayout === false || (input.adaptiveLayout === undefined && previous.adaptiveLayout === false)
       ? false : { ...DEFAULT_CONFIG.adaptiveLayout, ...(previous.adaptiveLayout || {}), ...(input.adaptiveLayout || {}) },
-    themeVariables: { ...variables, ...(previous.themeVariables || {}), ...(input.themeVariables || {}) },
+    themeVariables,
     isDark,
   };
 }

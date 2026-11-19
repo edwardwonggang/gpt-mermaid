@@ -18,6 +18,8 @@ import { BASE_GEOMETRY_EXPECTATIONS } from "./geometry-expectations.mjs";
 import { inspectStatePorts } from "./state-ports.mjs";
 import { inspectStateLayout } from "./state-layout-geometry.mjs";
 import { verifyStateIndependentVariants } from "./state-independent-variants.mjs";
+import { inspectStateReading } from "./state-reading-quality.mjs";
+import { verifyStyleRuntime } from "./style-runtime-browser.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.GPT_MERMAID_TEST_PORT || 4173);
@@ -62,6 +64,8 @@ try {
   assert.equal(await page.locator(".mgpt-diagram pre:visible").count(), 0);
   assert.deepEqual(errors, []);
   assert.deepEqual(external, []);
+  const styleRuntime=await verifyStyleRuntime(page);
+  await fs.writeFile(path.join(output,"style-runtime-browser.json"),JSON.stringify(styleRuntime,null,2));
 
   const programmatic = await page.evaluate(async () => {
     const result = await GPTMermaid.renderSvg("flowchart LR\nA[API] --> B[SVG]");
@@ -287,6 +291,13 @@ DONE --> DISABLED: 使能置 0`;
   assert.equal(completeState.ports.length, 38);
   assert.deepEqual(completeState.issues, [], "所有状态框和条件框须满足独立端口、直段及避障");
   assert.equal(completeState.markerCount,10,"每条业务关系必须有独立箭头");
+  const reading=await page.evaluate(inspectStateReading,programmatic.stateSvg);
+  const center=id=>reading.nodes.find(n=>n.id===id).x;
+  assert(reading.height<=880&&reading.width<=550,`阅读布局的同字号包络:${JSON.stringify(reading)}`);
+  assert(Math.abs(center("INIT")-(center("DISABLED")+center("WAIT_CONDITION"))/2)<60,"起点应位于分支之间");
+  assert(Math.abs(center("DONE")-center("NEG_MEASURE"))<85,"终点不应被反馈线拉离主流程");
+  assert(Math.abs(center("WAIT_CONDITION")-center("POS_MEASURE"))<140,"主流程横跳受控");
+  await fs.writeFile(path.join(output,"state-reading-quality.json"),JSON.stringify(reading,null,2));
   const stateSize=await page.evaluate(markup=>{const s=new DOMParser().parseFromString(markup,"image/svg+xml").documentElement;
     return s.getAttribute("viewBox").split(/[ ,]+/).map(Number).slice(2);},programmatic.stateSvg);
   assert(stateSize[0]<=700&&stateSize[1]<=1000,`原字号紧凑预算:${stateSize}`);

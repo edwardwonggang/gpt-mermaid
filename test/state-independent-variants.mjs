@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { inspectStateLayout } from "./state-layout-geometry.mjs";
+import { inspectStateReading } from "./state-reading-quality.mjs";
 const SOURCE = `stateDiagram-v2
 [*] --> Boot
 Boot --> Off: disabled
@@ -30,12 +31,21 @@ export async function verifyStateIndependentVariants(page, output) {
   for(const item of variants){
     const rendered=await page.evaluate(async item=>GPTMermaid.renderSvg(item.source,{fontFamily:item.font||"Arial, sans-serif"}),item);
     const geometry=await page.evaluate(inspectStateLayout,rendered.svg);
+    const reading=await page.evaluate(inspectStateReading,rendered.svg);
+    assert(reading.nodes.filter(n=>n.font).every(n=>n.font.includes((item.font||"Arial").split(",")[0])),
+      `${item.id} 必须实际使用指定字体`);
     await fs.writeFile(path.join(output,`${item.id}.svg`),rendered.svg);
     await fs.writeFile(path.join(output,`${item.id}.json`),JSON.stringify(geometry,null,2));
     assert.equal(geometry.logicalEdges,item.expected,`${item.id} 关系完整`);
     assert.equal(geometry.markerCount,item.expected,`${item.id} 独立箭头完整`);
     assert.deepEqual(geometry.issues,[],`${item.id} 最终几何`);
-    reports.push({id:item.id,width:rendered.width,height:rendered.height,edges:item.expected,issues:geometry.issues});
+    if(item.id.startsWith("ports-")){
+      const cross=n=>item.id.includes("-LR-")||item.id.includes("-RL-")?n.y:n.x;
+      const get=id=>cross(reading.nodes.find(n=>n.id===id));
+      assert(Math.abs(get("Boot")-(get("Off")+get("Waiting"))/2)<85,`${item.id} 起点位于分支之间`);
+      assert(Math.abs(get("Complete")-get("Negative"))<110,`${item.id} 终点靠近主流程`);
+    }
+    reports.push({id:item.id,width:rendered.width,height:rendered.height,edges:item.expected,issues:geometry.issues,reading});
   }
   await fs.writeFile(path.join(output,"report.json"),JSON.stringify(reports,null,2));
   return reports;

@@ -44,6 +44,7 @@ Blob URL → <img> → zoom/pan/fullscreen UI
 15. `src/runtime-loader.js`：按document/URL共享下载、捕获所属script的实际导出、失败清理及重试；不隐式接管任意全局Mermaid。
 16. `src/state-model.js`、`state-layout.js`：同次解析语义、条件框、独立端口、局部引线、反馈通道和复合状态统一布局；复用runtime已内嵌ELK。`state-ports.js`按真实尺寸分配每个连接端，容量不足只扩大所需维度。
 17. `src/state-constraints.js`：只读验证语义完整性、居中端口组、直段、障碍、容器包含关系和独立路线；`state-svg.js`消费冻结结果一次绘制，条件关系显示为两段path且保留同一owner，不合并状态关系的箭头。
+18. `src/layout-style.js`：组件阅读策略和图种适配，状态候选按结构主链横移、分支重心与终点邻近择优；`state-spacing.js`只在统一模型中压缩空白，保持框内坐标刚性不变。
 
 The runtime is intentionally loaded lazily. A page that never renders a Mermaid
 diagram does not pay the 5.4 MB runtime cost.
@@ -82,6 +83,8 @@ rejects the wait with `TimeoutError` / `AbortError`。实际执行仍在进行�
   反向关系先从业务图识别，再展开条件框；多个自环的上游虚拟ID绑定原关系ID，防止测量阶段丢边。
   候选在固定数量内按违反项、交叉、反馈分侧与面积比较，已可行解仍参与紧凑择优。
 - 非状态图仍保留原后处理；状态图为文字/尺寸测量 → 语义与条件框统一布局 → 全约束验证 → 绘制 → 实际轮廓贴边 → 方向色、箭头与裁线 → 最终几何报告。不能再次调用旧标签投影或通用改路破坏已验收几何。
+- 阅读风格采用均衡节点放置，合法候选仍比较主流程连续、分支平衡和终点邻近，不只看画布面积。空间压缩对节点/标签/路径使用统一主轴映射，并再次接受原约束验证；不能局部修补最终SVG。
+- 主题配置只继承显式覆盖，派生默认值随preset/字体重新生成；configure快照往返保留来源。初始化缓存与运行库共用完整参数对象，图种与字体切换须验最终computed值。
 - 折返不改图源、不镜像文字。反馈、跨层和子图等无安全切口的情况明确保留原布局。
 - 不以图名、节点文字或源码关键词选择避障分支。原路径可用时保留；候选必须检查完整路径的自交、重走、长度及折弯。
 - 已放标签立即移动实际DOM，下一条边必须读取新位置。特殊端点留白和首尾切线不可随正交端口投影丢失。
