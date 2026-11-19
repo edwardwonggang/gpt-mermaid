@@ -1,15 +1,11 @@
-/* 职责：状态和条件框的中点端口、引线预留与布局候选。
+/* 职责：状态和条件框的独立端口、局部占位与有限整体布局候选。
  * 调用方：state-layout；依赖：固定runtime注入的布局能力。
  * 红线：反馈边按业务关系识别，两段显示关系保留同一owner及原方向。
  */
 import { validateStateLayout } from "./state-constraints.js";
-export const STATE_LAYOUT_LEAD = 40;
-const LEAD = STATE_LAYOUT_LEAD;
-const SIDES = ["NORTH", "EAST", "SOUTH", "WEST"];
-const center = (n, side) => ({
-  x: side === "WEST" ? 0 : side === "EAST" ? n.width : n.width / 2,
-  y: side === "NORTH" ? 0 : side === "SOUTH" ? n.height : n.height / 2,
-});
+import { allocateStatePorts, STATE_PORT_SIDES as SIDES, stateSidePoint as center,
+  statePortLead, stateCardinalOnly } from "./state-ports.js";
+export const STATE_LAYOUT_LEAD = statePortLead(false);
 export function expandModel(input) {
   const order = [], visited = new Set(), active = new Set(), feedbackEdges = new Set();
   const visit = id => {
@@ -40,7 +36,7 @@ export function expandModel(input) {
     return rank.get(e.source) + rank.get(e.target);
   })();
   nodes.sort((a, b) => sortRank(a) - sortRank(b));
-  return { nodes, segments, edges: input.edges };
+  return { nodes, segments, edges: input.edges, arrowDepth: input.arrowDepth || 11 };
 }
 const options = {
   "elk.algorithm": "layered",
@@ -49,35 +45,35 @@ const options = {
   "elk.randomSeed": "1",
   "elk.layered.cycleBreaking.strategy": "MODEL_ORDER",
   "elk.layered.feedbackEdges": "true",
-  "elk.spacing.nodeNode": "32",
-  "elk.layered.spacing.nodeNodeBetweenLayers": "50",
-  "elk.spacing.edgeNode": "20",
-  "elk.layered.spacing.edgeNodeBetweenLayers": "20",
+  "elk.spacing.nodeNode": "20",
+  "elk.layered.spacing.nodeNodeBetweenLayers": "3",
+  "elk.spacing.edgeNode": "10",
+  "elk.layered.spacing.edgeNodeBetweenLayers": "3",
   "elk.spacing.edgeEdge": "16",
   "elk.layered.spacing.edgeEdgeBetweenLayers": "16",
 };
-function graphFor(model, portSides, direction) {
+function graphFor(model, allocation, direction) {
   return {
     id: "root", layoutOptions: { ...options, "elk.direction": direction || "DOWN" },
-    children: model.nodes.map(n => {
-      const node = { id: n.id, width: (n.envelope?.width || n.width) + LEAD * 2,
-        height: (n.envelope?.height || n.height) + LEAD * 2 };
-      if (portSides) {
+    children: model.nodes.map(original => {
+      const n = allocation?.nodes.get(original.id) || original;
+      const pad = n.padding || { NORTH: 21, SOUTH: 21, EAST: 0, WEST: 0 };
+      const node = { id: n.id, width: (n.envelope?.width || n.width) + pad.WEST + pad.EAST,
+        height: (n.envelope?.height || n.height) + pad.NORTH + pad.SOUTH };
+      if (allocation) {
         node.layoutOptions = { "elk.portConstraints": "FIXED_POS" };
-        node.ports = SIDES.map(side => {
-          const p = center(node, side);
-          if (n.envelope) {
-            if (side === "NORTH" || side === "SOUTH") p.x = LEAD + n.envelope.dx + n.width / 2;
-            else p.y = LEAD + n.envelope.dy + n.height / 2;
-          }
-          return { id: `${n.id}:${side}`, ...p, width: 0, height: 0, layoutOptions: { "elk.port.side": side } };
+        node.ports = n.ports.map(p => {
+          const horizontal = p.side === "NORTH" || p.side === "SOUTH";
+          const x = horizontal ? pad.WEST + (n.envelope?.dx || 0) + p.x : p.side === "WEST" ? 0 : node.width;
+          const y = horizontal ? p.side === "NORTH" ? 0 : node.height : pad.NORTH + (n.envelope?.dy || 0) + p.y;
+          return { id: p.id, x, y, width: 0, height: 0, layoutOptions: { "elk.port.side": p.side } };
         });
       }
       return node;
     }),
     edges: model.segments.map(e => {
-      const from = portSides ? `${e.source}:${portSides[e.id].source}` : e.source;
-      const to = portSides ? `${e.target}:${portSides[e.id].target}` : e.target;
+      const from = allocation ? `${e.id}:source` : e.source;
+      const to = allocation ? `${e.id}:target` : e.target;
       return { id: e.id, sources: [e.feedback ? to : from], targets: [e.feedback ? from : to] };
     }),
   };
@@ -96,20 +92,27 @@ export async function solveStateScope(input, direction, layout) {
   const free = await layout(graphFor(model, null, direction));
   const freeNodes = new Map(free.children.map(n => [n.id, n]));
   const bySegment = new Map(model.segments.map(e => [e.id, e]));
+  const vertical = !["LEFT","RIGHT"].includes(direction), axis = vertical ? "y" : "x";
+  const feedback = model.edges.filter(e=>model.segments.some(s=>s.owner===e.id&&s.feedback&&!s.loop))
+    .map(e=>({...e,span:Math.abs(freeNodes.get(e.source)[axis]-freeNodes.get(e.target)[axis])}))
+    .sort((a,b)=>b.span-a.span || a.id.localeCompare(b.id));
+  const channelSide = new Map(feedback.map((e,i)=>[e.id, feedback.length>1&&i===0 ? -1:1]));
+  const hints = new Map();
   const sides = Object.fromEntries(free.edges.map((edge, i) => {
     const s = edge.sections[0], m = bySegment.get(edge.id);
+    const start = m.feedback ? s.endPoint : s.startPoint, end = m.feedback ? s.startPoint : s.endPoint;
+    for (const [key,p] of [["source",start],["target",end]]) {
+      const side = sideOf(freeNodes.get(m[key]), p);
+      hints.set(`${m.id}:${key}`, side === "NORTH" || side === "SOUTH" ? p.x : p.y);
+    }
     const rotation = { DOWN: 0, LEFT: 1, UP: 2, RIGHT: 3 }[direction || "DOWN"];
     const rotate = side => SIDES[(SIDES.indexOf(side) + rotation) % 4];
     if (m.loop) {
       if (m.source === m.target) return [edge.id, { source: rotate("EAST"), target: rotate("NORTH") }];
-      return [edge.id, m.arrow ? { source: rotate("NORTH"), target: rotate("NORTH") }
+      return [edge.id, m.arrow ? { source: rotate("EAST"), target: rotate("NORTH") }
         : { source: rotate("EAST"), target: rotate("WEST") }];
     }
-    if (m.feedback) {
-      const node = id => model.nodes.find(n => n.id === id);
-      return [edge.id, { source: rotate(node(m.source).kind === "label" ? "NORTH" : "EAST"),
-        target: rotate(node(m.target).kind === "label" ? "SOUTH" : "EAST") }];
-    }
+    if (m.feedback) return [edge.id, { source: rotate("NORTH"), target: rotate("SOUTH") }];
     return [edge.id, { source: sideOf(freeNodes.get(m.source), s.startPoint),
       target: sideOf(freeNodes.get(m.target), s.endPoint) }];
   }));
@@ -121,48 +124,77 @@ export async function solveStateScope(input, direction, layout) {
       RIGHT: ["EAST", "WEST"], LEFT: ["WEST", "EAST"] }[direction || "DOWN"];
     sides[e.id][key] = [forward[start ? 0 : 1], ...SIDES].find(s => !n.envelope.blockedSides.includes(s));
   }
-  const candidateFor = async selected => {
-  const fixed = await layout(graphFor(model, selected, direction));
+  const candidateFor = async (selected, ordering, poleTurn = 0) => {
+  // 非矩形只允许轴向极点；按初次路由的方向把多连接端分散到其它合法侧。
+  for (const n of model.nodes.filter(stateCardinalOnly)) {
+    const occupied = new Set();
+    for (const e of model.segments) for (const end of ["source","target"]) if (e[end] === n.id) {
+      const desired = selected[e.id][end];
+      const fallback = [1,3,2].map(delta=>SIDES[(SIDES.indexOf(desired)+delta+poleTurn)%4]);
+      const side = [desired,...fallback,...SIDES].find(s=>!occupied.has(s));
+      if (!side) throw new Error(`unsupported: state-port-capacity:${n.id}`);
+      selected[e.id][end] = side; occupied.add(side);
+    }
+  }
+  const selectedHints = new Map(hints);
+  if (ordering) for (const m of model.segments) {
+    for (const end of ["source","target"]) {
+      if (model.nodes.find(n=>n.id===m[end]).kind !== "state") continue;
+      const side = channelSide.get(m.owner);
+      const hint = side ? (ordering===1 ? side : ordering===2 ? -side : ordering===3 ? 1 : -1)*1e6
+        + feedback.find(e=>e.id===m.owner).span : selectedHints.get(`${m.id}:${end}`);
+      selectedHints.set(`${m.id}:${end}`, hint);
+    }
+  }
+  const allocation = allocateStatePorts(model, selected, selectedHints);
+  const fixed = await layout(graphFor(model, allocation, direction));
   const nodes = new Map(fixed.children.map(n => {
-    const inputNode = model.nodes.find(m => m.id === n.id);
-    return [n.id, { ...inputNode, x: n.x + LEAD + (inputNode.envelope?.dx || 0),
-      y: n.y + LEAD + (inputNode.envelope?.dy || 0) }];
+    const inputNode = allocation.nodes.get(n.id);
+    return [n.id, { ...inputNode, x: n.x + inputNode.padding.WEST + (inputNode.envelope?.dx || 0),
+      y: n.y + inputNode.padding.NORTH + (inputNode.envelope?.dy || 0) }];
   }));
-  const port = (node, side) => ({ x: node.x + center(node, side).x, y: node.y + center(node, side).y });
+  const port = (node, id) => { const p = allocation.ends.get(id); return { x: node.x + p.x, y: node.y + p.y }; };
   const fixedEdges = new Map(fixed.edges.map(e => [e.id, e]));
   const segments = model.segments.map(m => {
     const e = fixedEdges.get(m.id), s = e.sections[0], endpoints = selected[e.id];
     const route = [s.startPoint, ...(s.bendPoints || []), s.endPoint];
     if (m.feedback) route.reverse();
     return { ...m, sides: endpoints, points: [
-      port(nodes.get(m.source), endpoints.source), ...route, port(nodes.get(m.target), endpoints.target),
+      port(nodes.get(m.source), `${m.id}:source`), ...route, port(nodes.get(m.target), `${m.id}:target`),
     ] };
   });
   return { width: fixed.width, height: fixed.height, nodes: [...nodes.values()], segments, edges: input.edges, sides:selected };
   };
-  let best = await candidateFor(sides), quality = validateStateLayout(best);
-  if (quality.accepted) return best;
+  let best = await candidateFor(structuredClone(sides),1), quality = validateStateLayout(best);
+  const lanePenalty = result => feedback.reduce((sum,e)=>{
+    const byId = new Map(result.nodes.map(n=>[n.id,n])), a=byId.get(e.source),b=byId.get(e.target);
+    const label=byId.get(`${e.id}:label`);
+    if (!label) return sum;
+    const cross = n => vertical ? n.x+n.width/2 : n.y+n.height/2;
+    return sum + (Math.sign(cross(label)-(cross(a)+cross(b))/2) === channelSide.get(e.id) ? 0:1);
+  },0);
   const score = (result, report) => [report.issues.length, report.intersections.length,
-    result.segments.reduce((sum,e)=>sum+e.points.length,0),result.width*result.height];
+    lanePenalty(result), result.width*result.height, result.segments.reduce((sum,e)=>sum+e.points.length,0)];
   const better = (a,b) => a.some((v,i)=>v<b[i]&&a.slice(0,i).every((x,j)=>x===b[j]));
   let bestScore = score(best, quality);
   // 有限整体候选：变更的是环路/反馈通道方向，全部几何重新求解并验收，不修改成品路径。
-  for (const loopTurn of [0,1,2,3]) for (const mirror of [false,true]) {
-    if (!loopTurn && !mirror) continue;
+  const loopTurns = model.segments.some(e=>e.loop) ? [0,1,2,3] : [0];
+  const orderings = feedback.length ? [1,0,2,3,4] : [1];
+  const alternatives = loopTurns.flatMap(loopTurn=>orderings.map(ordering=>({loopTurn,ordering,poleTurn:0})));
+  const loopOwners=[...new Set(model.segments.filter(e=>e.loop).map(e=>e.owner))];
+  if(loopOwners.length>1) for(const loopTurn of loopTurns) alternatives.push({loopTurn,ordering:1,poleTurn:0,spreadLoops:true});
+  if (model.nodes.some(n=>stateCardinalOnly(n)&&model.segments.filter(e=>e.source===n.id||e.target===n.id).length>1))
+    for (const poleTurn of [1,2,3]) alternatives.push({loopTurn:0,ordering:1,poleTurn});
+  for (const {loopTurn,ordering,poleTurn,spreadLoops} of alternatives) {
+    if (!loopTurn && ordering===1 && !poleTurn && !spreadLoops) continue;
     const selected = structuredClone(sides);
     for (const edge of model.segments) {
       if (edge.loop) for (const end of ["source","target"]) {
-        selected[edge.id][end] = SIDES[(SIDES.indexOf(sides[edge.id][end])+loopTurn)%4];
-      } else if (edge.feedback && mirror) {
-        const transverse = ["LEFT","RIGHT"].includes(direction) ? ["NORTH","SOUTH"] : ["EAST","WEST"];
-        for (const end of ["source","target"]) {
-          const index = transverse.indexOf(selected[edge.id][end]);
-          if (index >= 0) selected[edge.id][end] = transverse[1-index];
-        }
+        selected[edge.id][end] = SIDES[(SIDES.indexOf(sides[edge.id][end])+loopTurn
+          +(spreadLoops?loopOwners.indexOf(edge.owner):0))%4];
       }
     }
-    const result = await candidateFor(selected), report = validateStateLayout(result);
-    if (report.accepted) return result;
+    const result = await candidateFor(selected,ordering,poleTurn), report = validateStateLayout(result);
     const next = score(result,report);
     if (better(next,bestScore)) { best=result;bestScore=next; }
   }

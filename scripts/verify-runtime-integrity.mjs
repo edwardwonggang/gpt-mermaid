@@ -14,9 +14,9 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXPECTED_MERMAID_VERSION = "12.3.0";
-// 公开内嵌ELK布局及同次解析状态模型，不新增另一份引擎或第二次解析。
-const EXPECTED_BYTES = 5_656_054;
-const EXPECTED_SHA256 = "a34281c56acf5c0edbe37638d19e8831a8f6687db337b6201d31664752f3ae25";
+// 保留内嵌ELK/同次语义模型；状态多自环的辅助ID绑定原edge.id，防止互相覆盖。
+const EXPECTED_BYTES = 5_656_093;
+const EXPECTED_SHA256 = "32e4a472d8d65ef573ef221b7c9f25bc2bc66ec74a8ff9ba21d94fa5280822e9";
 
 const patchScript = fs.readFileSync(path.join(root, "scripts/apply-patch.mjs"), "utf8");
 const versionMatch = patchScript.match(/const VERSION = ["']([^"']+)["'];/);

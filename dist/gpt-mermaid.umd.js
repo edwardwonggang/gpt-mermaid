@@ -961,11 +961,11 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     edge.points = start ? next : next.reverse();
   }
   function loopRoute(box, side, size, reach = 0, lane = 0, laneCount = 1) {
-    const horizontal = horizontalSide(side), center2 = horizontal ? box.y + box.height / 2 : box.x + box.width / 2;
+    const horizontal = horizontalSide(side), center = horizontal ? box.y + box.height / 2 : box.x + box.width / 2;
     const span = Math.min(32, (horizontal ? box.height : box.width) * 0.7);
     const count = Math.max(1, Math.floor(laneCount) || 1);
     const slotSpan = span / count;
-    const laneCenter = center2 + (Math.max(0, lane) - (count - 1) / 2) * slotSpan;
+    const laneCenter = center + (Math.max(0, lane) - (count - 1) / 2) * slotSpan;
     const laneSpan = count === 1 ? span : Math.max(2, Math.min(span, slotSpan * 0.65));
     const offset = Math.max(reach, 42, (horizontal ? size.width : size.height) + 24);
     const a = onSide(box, side, laneCenter - laneSpan / 2), b = onSide(box, side, laneCenter + laneSpan / 2);
@@ -1096,12 +1096,12 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     return path;
   }
   var boxesOverlap = (a, b) => a.x < b.right && a.right > b.x && a.y < b.bottom && a.bottom > b.y;
-  function nativeLabelBox(center2, size) {
+  function nativeLabelBox(center, size) {
     return {
-      x: center2.x - size.width / 2 - 7,
-      y: center2.y - size.height / 2 - 7,
-      right: center2.x + size.width / 2 + 7,
-      bottom: center2.y + size.height / 2 + 7
+      x: center.x - size.width / 2 - 7,
+      y: center.y - size.height / 2 - 7,
+      right: center.x + size.width / 2 + 7,
+      bottom: center.y + size.height / 2 + 7
     };
   }
   function labelOnRoute(svg, points, size, barriers, occupied, original) {
@@ -1196,14 +1196,14 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
           points = [a, first, corner, last, b];
         }
         if (!clearRoute(points, obstacles, 4)) continue;
-        const center2 = { x: (points[1].x + points[2].x) / 2, y: (points[1].y + points[2].y) / 2 };
-        const reservation = nativeLabelBox(center2, size);
+        const center = { x: (points[1].x + points[2].x) / 2, y: (points[1].y + points[2].y) / 2 };
+        const reservation = nativeLabelBox(center, size);
         if (label && [...nodes.values()].some((node) => boxesOverlap(reservation, node.box))) continue;
         edge.points = points;
         writePoints(svg, edge.element, points);
         if (label) {
-          edge.element.setAttribute("data-gptm-label-x", String(center2.x));
-          edge.element.setAttribute("data-gptm-label-y", String(center2.y));
+          edge.element.setAttribute("data-gptm-label-x", String(center.x));
+          edge.element.setAttribute("data-gptm-label-y", String(center.y));
         }
         edge.element.setAttribute("data-gptm-native-rerouted", "true");
         edge.element.setAttribute("data-gptm-self-loop", "true");
@@ -1256,15 +1256,15 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     const shields = [...ports.values()].filter((port) => port.edge.compatible).map((port) => {
       const arrow = port.edge.element.hasAttribute(port.start ? "marker-start" : "marker-end");
       const half = arrow ? Math.min(9, port.spacing * 0.38) : 2.5, p = port.anchor, horizontal = horizontalSide(port.side);
-      const distance3 = arrow ? 20 : 6, out = signOf(port.side) * distance3;
+      const distance2 = arrow ? 20 : 6, out = signOf(port.side) * distance2;
       const x = horizontal ? Math.min(p.x, p.x + out) : p.x - half;
       const y = horizontal ? p.y - half : Math.min(p.y, p.y + out);
       return {
         edge: port.edge,
         x,
         y,
-        right: x + (horizontal ? distance3 : half * 2),
-        bottom: y + (horizontal ? half * 2 : distance3)
+        right: x + (horizontal ? distance2 : half * 2),
+        bottom: y + (horizontal ? half * 2 : distance2)
       };
     });
     const approaches = [...ports.values()].filter((port) => port.edge.compatible).map((port) => {
@@ -1398,10 +1398,10 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
           return result;
         };
         if (size2) {
-          const center2 = { x: size2.x + size2.width / 2, y: size2.y + size2.height / 2 };
+          const center = { x: size2.x + size2.width / 2, y: size2.y + size2.height / 2 };
           for (const horizontal of [true, false]) {
-            const enter = horizontal ? { x: center2.x - 8, y: center2.y } : { x: center2.x, y: center2.y - 8 };
-            const exit = horizontal ? { x: center2.x + 8, y: center2.y } : { x: center2.x, y: center2.y + 8 };
+            const enter = horizontal ? { x: center.x - 8, y: center.y } : { x: center.x, y: center.y - 8 };
+            const exit = horizontal ? { x: center.x + 8, y: center.y } : { x: center.x, y: center.y + 8 };
             const through = vector2(enter, exit);
             const before = search(
               start,
@@ -1546,9 +1546,9 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         if (route) consider(simplifyPoints([a.anchor, ...route, b.anchor]));
       }
       if (!best && size) {
-        const center2 = { x: size.x + size.width / 2, y: size.y + size.height / 2 }, candidates = [];
+        const center = { x: size.x + size.width / 2, y: size.y + size.height / 2 }, candidates = [];
         for (let row = -6; row <= 6; row++) for (let column = -6; column <= 6; column++) {
-          const point = { x: center2.x + column * 22, y: center2.y + row * 18 }, box = nativeLabelBox(point, size);
+          const point = { x: center.x + column * 22, y: center.y + row * 18 }, box = nativeLabelBox(point, size);
           if (labelBarriers.some((b2) => boxesOverlap(box, b2)) || occupied.some(([p, q]) => segmentBlocked(p, q, [box], 2))) continue;
           candidates.push({ ...point, box, score: distance(start, point) + distance(point, end) });
         }
@@ -1633,9 +1633,9 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       const right = Math.max(...textBoxes.map((item) => item.right));
       const inverse = node.getScreenCTM()?.inverse();
       if (!inverse) continue;
-      const center2 = new DOMPoint((left + right) / 2, textBoxes[0].top).matrixTransform(inverse);
+      const center = new DOMPoint((left + right) / 2, textBoxes[0].top).matrixTransform(inverse);
       const target = new DOMPoint(box.left + box.width / 2, box.top).matrixTransform(inverse);
-      shift(label, target.x - center2.x, 0);
+      shift(label, target.x - center.x, 0);
     }
   }
   function journeyTextMeasurer(text) {
@@ -1968,8 +1968,8 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     });
     const activation = activations[0]?.getBBox();
     if (!activation) return { center: x, border: x };
-    const center2 = activation.x + activation.width / 2;
-    return { center: center2, border: towardsX >= center2 ? activation.x + activation.width : activation.x };
+    const center = activation.x + activation.width / 2;
+    return { center, border: towardsX >= center ? activation.x + activation.width : activation.x };
   }
   function sequenceNumbers(svg, variables) {
     for (const text of svg.querySelectorAll("text.sequenceNumber")) {
@@ -2078,8 +2078,8 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
   }
   function arrowCoveredLength(edge, length, depth, start) {
     if (!depth || typeof edge.getPointAtLength !== "function") return depth;
-    const point = (distance3) => {
-      const p = edge.getPointAtLength(start ? distance3 : length - distance3);
+    const point = (distance2) => {
+      const p = edge.getPointAtLength(start ? distance2 : length - distance2);
       if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) throw new Error("invalid SVG point");
       return p;
     };
@@ -2087,8 +2087,8 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     const magnitude = Math.hypot(adjacent.x - tip.x, adjacent.y - tip.y);
     if (!magnitude) return depth;
     const v = { x: (adjacent.x - tip.x) / magnitude, y: (adjacent.y - tip.y) / magnitude };
-    const inside = (distance3) => {
-      const p = point(distance3), dx = p.x - tip.x, dy = p.y - tip.y;
+    const inside = (distance2) => {
+      const p = point(distance2), dx = p.x - tip.x, dy = p.y - tip.y;
       const along = dx * v.x + dy * v.y, across = dx * v.y - dy * v.x;
       return along >= -1e-5 && along <= depth && Math.abs(across) <= along * 0.4 + 1e-4;
     };
@@ -2278,8 +2278,8 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       const samples = Array.from({ length: 41 }, (_, i) => inSvg(svg, original, original.getPointAtLength(length * i / 40)));
       let points = [start, end];
       if (samples.slice(1).some((p, i) => segmentBlocked(samples[i], p, obstacles, 5))) {
-        const center2 = (box2) => ({ x: box2.x + box2.width / 2, y: box2.y + box2.height / 2 });
-        const a = center2(source.box), b = center2(target.box), horizontal = Math.abs(b.x - a.x) >= Math.abs(b.y - a.y);
+        const center = (box2) => ({ x: box2.x + box2.width / 2, y: box2.y + box2.height / 2 });
+        const a = center(source.box), b = center(target.box), horizontal = Math.abs(b.x - a.x) >= Math.abs(b.y - a.y);
         const direction = horizontal ? Math.sign(b.x - a.x) : Math.sign(b.y - a.y);
         const port = (node, point, outward) => horizontal ? { x: outward > 0 ? node.box.right : node.box.x, y: point.y } : { x: point.x, y: outward > 0 ? node.box.bottom : node.box.y };
         const p = port(source, a, direction), q = port(target, b, -direction);
@@ -2451,8 +2451,8 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     const ranked = flowRanks(nodes, edges);
     if (ranked.reason) return skip(ranked.reason);
     const { ranks, layers } = ranked;
-    const center2 = (box, key) => box[key] + box[key === "x" ? "width" : "height"] / 2;
-    if (edges.some((edge) => sign * (center2(nodes.find((node) => node.id === edge.end).box, axis) - center2(nodes.find((node) => node.id === edge.start).box, axis)) <= 0)) {
+    const center = (box, key) => box[key] + box[key === "x" ? "width" : "height"] / 2;
+    if (edges.some((edge) => sign * (center(nodes.find((node) => node.id === edge.end).box, axis) - center(nodes.find((node) => node.id === edge.start).box, axis)) <= 0)) {
       return skip("non-monotonic-layout");
     }
     const cuts = layers.slice(0, -1).map((layer, index) => ({
@@ -2509,9 +2509,9 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       band.forward = sign * (index % 2 ? -1 : 1);
       band.crossStart = cursor;
       band.map = (point) => {
-        const distance3 = sign > 0 ? point[axis] - band.box[axis] : band.box[axis] + band.box[axisSize] - point[axis];
+        const distance2 = sign > 0 ? point[axis] - band.box[axis] : band.box[axis] + band.box[axisSize] - point[axis];
         return {
-          [axis]: band.forward > 0 ? primaryMin + distance3 : primaryMax - distance3,
+          [axis]: band.forward > 0 ? primaryMin + distance2 : primaryMax - distance2,
           [cross2]: band.crossStart + point[cross2] - band.box[cross2]
         };
       };
@@ -2522,7 +2522,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       cursor += band.box[crossSize] + Math.max(config.gap, (boundaryLabel?.[crossSize] || 0) + 24);
     });
     const positions = nodes.map((node) => {
-      const point = nodeBands.get(node.id).map({ x: center2(node.box, "x"), y: center2(node.box, "y") });
+      const point = nodeBands.get(node.id).map({ x: center(node.box, "x"), y: center(node.box, "y") });
       return {
         id: node.id,
         x: point.x,
@@ -2544,8 +2544,8 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       if (fromBand === toBand) {
         points = edge.points.map(fromBand.map);
         if (edge.labelBox) label = fromBand.map({
-          x: center2(edge.labelBox, "x"),
-          y: center2(edge.labelBox, "y")
+          x: center(edge.labelBox, "x"),
+          y: center(edge.labelBox, "y")
         });
       } else {
         const from = positionById.get(edge.start);
@@ -3127,9 +3127,9 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       let farthest = 0, at = -1;
       for (let i = lo + 1; i < hi; i++) {
         const p = input[i], t = length2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / length2 ** 2)) : 0;
-        const distance3 = Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
-        if (distance3 > farthest) {
-          farthest = distance3;
+        const distance2 = Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
+        if (distance2 > farthest) {
+          farthest = distance2;
           at = i;
         }
       }
@@ -3481,9 +3481,9 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         return true;
       };
       if (consider(route) || !ownLabel || best || ++labelSearches > 1) continue;
-      const label = ownLabel.box, center2 = { x: (label.x + label.right) / 2, y: (label.y + label.bottom) / 2 }, candidates = [];
+      const label = ownLabel.box, center = { x: (label.x + label.right) / 2, y: (label.y + label.bottom) / 2 }, candidates = [];
       for (let row = -3; row <= 3; row++) for (let column = -3; column <= 3; column++) {
-        const p = { x: center2.x + column * (label.width / 2 + GAP), y: center2.y + row * (label.height + GAP) };
+        const p = { x: center.x + column * (label.width / 2 + GAP), y: center.y + row * (label.height + GAP) };
         const box = {
           x: p.x - label.width / 2 - 7,
           right: p.x + label.width / 2 + 7,
@@ -3670,8 +3670,8 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         for (const node of model.nodes) {
           if (node.id === edge.source || node.id === edge.target) continue;
           const p = positions.get(node.id), t = Math.max(0, Math.min(1, ((p.x - a.x) * v.x + (p.y - a.y) * v.y) / length2));
-          const distance3 = norm(p, { x: a.x + t * v.x, y: a.y + t * v.y });
-          scale = Math.max(scale, (Math.hypot(node.box.width, node.box.height) / 2 + 20) / distance3);
+          const distance2 = norm(p, { x: a.x + t * v.x, y: a.y + t * v.y });
+          scale = Math.max(scale, (Math.hypot(node.box.width, node.box.height) / 2 + 20) / distance2);
         }
       }
       const bounds = boxOf([...positions.values()]);
@@ -3697,11 +3697,11 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       }
       for (const edge of liveEdges) {
         const a = point(edge.source), b = point(edge.target), v = vector(a, b), length = norm(a, b);
-        const port = (center2, box, sign, start) => {
+        const port = (center, box, sign, start) => {
           const t = Math.min(Math.abs(box.width / 2 / v.x), Math.abs(box.height / 2 / v.y));
           const oldAnchor = start ? edge.controls?.[0] : edge.controls?.at(-1), oldTip = start ? edge.points[0] : edge.points.at(-1);
           const offset = !triangleCompatible(edge.element) && oldAnchor ? norm(oldAnchor, oldTip) : 0;
-          return { x: center2.x + sign * v.x * (t + offset / length), y: center2.y + sign * v.y * (t + offset / length) };
+          return { x: center.x + sign * v.x * (t + offset / length), y: center.y + sign * v.y * (t + offset / length) };
         };
         writePoints(svg, edge.element, [port(a, boxes.get(edge.source), 1, true), port(b, boxes.get(edge.target), -1, false)]);
         edge.element.removeAttribute("data-gptm-label-x");
@@ -4179,9 +4179,71 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     }
   }
 
+  // src/state-ports.js
+  var STATE_PORT_SIDES = ["NORTH", "EAST", "SOUTH", "WEST"];
+  var STATE_PORT_GAP = 18;
+  var STATE_CORNER_RADIUS = 4;
+  var STATE_VISIBLE_LEAD = 16;
+  var statePortLead = (arrow, depth = 11) => STATE_VISIBLE_LEAD + STATE_CORNER_RADIUS + 1 + (arrow ? depth : 0);
+  var stateCardinalOnly = (n) => /^(stateStart|stateEnd|choice|choiceState)$/.test(n.shape);
+  function stateSidePoint(n, side, offset = 0) {
+    return {
+      x: side === "WEST" ? 0 : side === "EAST" ? n.width : n.width / 2 + offset,
+      y: side === "NORTH" ? 0 : side === "SOUTH" ? n.height : n.height / 2 + offset
+    };
+  }
+  function allocateStatePorts(model, selected, hints = /* @__PURE__ */ new Map()) {
+    const nodes = new Map(model.nodes.map((n) => [n.id, {
+      ...n,
+      arrowDepth: model.arrowDepth || 11,
+      ports: [],
+      padding: Object.fromEntries(STATE_PORT_SIDES.map((s) => [s, 0]))
+    }]));
+    const ends = /* @__PURE__ */ new Map();
+    for (const e of model.segments) for (const end of ["source", "target"]) {
+      const n = nodes.get(e[end]), side = selected[e.id][end], id = `${e.id}:${end}`;
+      const entry = {
+        id,
+        segment: e.id,
+        owner: e.owner,
+        end,
+        side,
+        lead: statePortLead(end === "target" && e.arrow, n.arrowDepth),
+        hint: hints.get(id) ?? 0
+      };
+      n.ports.push(entry);
+      ends.set(id, entry);
+    }
+    for (const n of nodes.values()) {
+      for (const side of STATE_PORT_SIDES) {
+        const ports = n.ports.filter((p) => p.side === side).sort((a, b) => a.hint - b.hint || a.id.localeCompare(b.id));
+        if (!ports.length) continue;
+        if (stateCardinalOnly(n) && ports.length > 1) throw new Error(`unsupported: state-port-capacity:${n.id}:${side}`);
+        const dim = side === "NORTH" || side === "SOUTH" ? "width" : "height";
+        if (!stateCardinalOnly(n)) {
+          const radius = n.cornerRadius ?? (n.kind === "label" ? 13 : 12);
+          const footprint = ports.some((p) => p.end === "target" && model.segments.find((e) => e.id === p.segment).arrow) ? n.arrowDepth * 0.4 + 1 : 1;
+          n[dim] = Math.max(n[dim], 2 * (radius + footprint) + (ports.length - 1) * STATE_PORT_GAP);
+        }
+        ports.forEach((p, index) => {
+          p.offset = (index - (ports.length - 1) / 2) * STATE_PORT_GAP;
+        });
+        n.padding[side] = Math.max(...ports.map((p) => p.lead));
+      }
+      if (n.envelope) {
+        n.envelope = {
+          ...n.envelope,
+          width: n.envelope.width + n.width - model.nodes.find((m) => m.id === n.id).width,
+          height: n.envelope.height + n.height - model.nodes.find((m) => m.id === n.id).height
+        };
+      }
+      for (const p of n.ports) Object.assign(p, stateSidePoint(n, p.side, p.offset));
+    }
+    return { nodes, ends };
+  }
+
   // src/state-constraints.js
   var EPS3 = 0.01;
-  var LEAD = 40;
   var GAP2 = 10;
   var dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   function simplify(points) {
@@ -4207,23 +4269,6 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       { x: n.x - pad, y: n.y + n.height + pad }
     ];
     return corners.some((p, i) => segmentIntersection(a, b, p, corners[(i + 1) % 4])?.kind === "cross");
-  }
-  function commonPrefix(left, right) {
-    let a = left[0], b = right[0], i = 1, j = 1;
-    const shared = [];
-    while (i < left.length && j < right.length && dist(a, b) < EPS3) {
-      const p = left[i], q = right[j], al = dist(a, p), bl = dist(b, q);
-      const u = { x: (p.x - a.x) / al, y: (p.y - a.y) / al };
-      const v = { x: (q.x - b.x) / bl, y: (q.y - b.y) / bl };
-      if (dist(u, v) > EPS3) break;
-      const end = al < bl ? p : q;
-      shared.push([a, end]);
-      a = end;
-      b = end;
-      if (al <= bl + EPS3) i++;
-      if (bl <= al + EPS3) j++;
-    }
-    return shared;
   }
   function validateStateLayout(model) {
     if (model.status === "unsupported") return { accepted: false, unsupported: model.reason, unmatched: model.unmatched };
@@ -4282,12 +4327,25 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
           { side: "SOUTH", x: n.x + n.width / 2, y: n.y + n.height, vx: 0, vy: 1 },
           { side: "WEST", x: n.x, y: n.y + n.height / 2, vx: -1, vy: 0 },
           { side: "EAST", x: n.x + n.width, y: n.y + n.height / 2, vx: 1, vy: 0 }
-        ].sort((a, b) => dist(a, p) - dist(b, p));
+        ].sort((a, b) => Math.abs(a.vx ? a.x - p.x : a.y - p.y) - Math.abs(b.vx ? b.x - p.x : b.y - p.y));
         const port = centers[0], lead = (q.x - p.x) * port.vx + (q.y - p.y) * port.vy;
         const normalError = Math.abs((q.x - p.x) * port.vy - (q.y - p.y) * port.vx);
-        ports.push({ segment: e.id, node: n.id, side: port.side, middleError: dist(port, p), lead, normalError });
-        if (dist(port, p) > EPS3 || normalError > EPS3) issue("G02", e.id, ports.at(-1));
-        if (lead < LEAD - EPS3) issue("G03", e.id, ports.at(-1));
+        const offset = port.vx ? p.y - port.y : p.x - port.x;
+        const contourGap = Math.abs(port.vx ? p.x - port.x : p.y - port.y);
+        ports.push({
+          segment: e.id,
+          node: n.id,
+          side: port.side,
+          middleError: Math.abs(offset),
+          offset,
+          contourGap,
+          lead,
+          normalError,
+          arrow: !start && e.arrow
+        });
+        if (contourGap > EPS3 || normalError > EPS3 || stateCardinalOnly(n) && Math.abs(offset) > EPS3)
+          issue("G02", e.id, ports.at(-1));
+        if (lead < statePortLead(!start && e.arrow, n.arrowDepth) - EPS3) issue("G03", e.id, ports.at(-1));
       }
       for (let i = 1; i < e.points.length; i++) {
         const a = e.points[i - 1], b = e.points[i];
@@ -4308,22 +4366,47 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         }
       }
     }
+    for (const n of nodes.values()) for (const side of ["NORTH", "EAST", "SOUTH", "WEST"]) {
+      const assigned = ports.filter((p) => p.node === n.id && p.side === side).sort((a, b) => a.offset - b.offset);
+      if (!assigned.length) continue;
+      const span = side === "NORTH" || side === "SOUTH" ? n.width : n.height;
+      const radius = n.cornerRadius ?? (n.kind === "label" ? 13 : 12);
+      const footprint = assigned.some((p) => p.arrow) ? (n.arrowDepth || 11) * 0.4 + 1 : 1;
+      const usable = span / 2 - (stateCardinalOnly(n) ? span / 2 : radius + footprint);
+      if (Math.abs(assigned[0].offset + assigned.at(-1).offset) > EPS3 || assigned.some((p) => Math.abs(p.offset) > usable + EPS3)) issue("G02", n.id, `\u7AEF\u53E3\u7EC4\u672A\u5C45\u4E2D\u6216\u8D8A\u8FC7\u5B89\u5168\u76F4\u8FB9:${side}`);
+      for (let i = 1; i < assigned.length; i++) if (assigned[i].offset - assigned[i - 1].offset < STATE_PORT_GAP - EPS3)
+        issue("G08", n.id, `\u7AEF\u53E3\u5171\u7528\u6216\u95F4\u8DDD\u4E0D\u8DB3:${side}`);
+    }
+    const opposite = { NORTH: "SOUTH", SOUTH: "NORTH", EAST: "WEST", WEST: "EAST" };
+    for (const n of nodes.values()) if (n.kind === "label") {
+      const ends = ports.filter((p) => p.node === n.id);
+      if (ends.length !== 2 || opposite[ends[0].side] !== ends[1].side) issue("G04", n.id, "\u6761\u4EF6\u6846\u987B\u4ECE\u76F8\u5BF9\u4E24\u4FA7\u8FDE\u63A5");
+    }
     const boxes = [...nodes.values()];
     for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
       const a = boxes[i], b = boxes[j];
       if (ancestor(a.id, b.id) || ancestor(b.id, a.id)) continue;
       if (a.x < b.x + b.width + GAP2 && a.x + a.width + GAP2 > b.x && a.y < b.y + b.height + GAP2 && a.y + a.height + GAP2 > b.y) issue("G05", a.id, `\u6846\u4E0E\u6846\u8DDD\u79BB\u4E0D\u8DB3:${b.id}`);
     }
+    for (const n of boxes) if (n.parentId && nodes.has(n.parentId)) {
+      const parent = nodes.get(n.parentId);
+      if (n.x < parent.x - EPS3 || n.y < parent.y - EPS3 || n.x + n.width > parent.x + parent.width + EPS3 || n.y + n.height > parent.y + parent.height + EPS3) issue("G05", n.id, "\u5B50\u5BF9\u8C61\u8D85\u51FA\u6240\u5C5E\u5BB9\u5668");
+    }
+    for (const e of segments2) {
+      const a = nodes.get(e.source), b = nodes.get(e.target);
+      if (!a.parentId || a.parentId !== b.parentId) continue;
+      const parent = nodes.get(a.parentId);
+      if (parent && e.points.some((p) => p.x < parent.x - EPS3 || p.y < parent.y - EPS3 || p.x > parent.x + parent.width + EPS3 || p.y > parent.y + parent.height + EPS3))
+        issue("G05", e.id, "\u5185\u90E8\u5173\u7CFB\u8D85\u51FA\u6240\u5C5E\u5BB9\u5668");
+    }
     const intersections = [];
     for (let i = 0; i < segments2.length; i++) for (let j = i + 1; j < segments2.length; j++) {
-      const a = segments2[i], b = segments2[j], shared = [];
-      if (a.source === b.source) shared.push(...commonPrefix(a.points, b.points));
-      if (a.target === b.target) shared.push(...commonPrefix(a.points.slice().reverse(), b.points.slice().reverse()));
+      const a = segments2[i], b = segments2[j];
       for (let p = 1; p < a.points.length; p++) for (let q = 1; q < b.points.length; q++) {
         const hit = segmentIntersection(a.points[p - 1], a.points[p], b.points[q - 1], b.points[q]);
         if (!hit) continue;
-        const onShared = shared.some(([x, y]) => Math.abs(dist(x, hit) + dist(hit, y) - dist(x, y)) < EPS3);
-        if (!onShared) intersections.push({ a: a.id, b: b.id, ...hit });
+        intersections.push({ a: a.id, b: b.id, ...hit });
+        if (hit.kind === "overlap" || hit.kind === "touch") issue("G08", a.id, `\u5173\u7CFB\u4E0E${b.id}\u91CD\u53E0\u6216\u63A5\u89E6`);
       }
     }
     return {
@@ -4339,13 +4422,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
   }
 
   // src/state-model.js
-  var STATE_LAYOUT_LEAD = 40;
-  var LEAD2 = STATE_LAYOUT_LEAD;
-  var SIDES = ["NORTH", "EAST", "SOUTH", "WEST"];
-  var center = (n, side) => ({
-    x: side === "WEST" ? 0 : side === "EAST" ? n.width : n.width / 2,
-    y: side === "NORTH" ? 0 : side === "SOUTH" ? n.height : n.height / 2
-  });
+  var STATE_LAYOUT_LEAD = statePortLead(false);
   function expandModel(input) {
     const order = [], visited = /* @__PURE__ */ new Set(), active = /* @__PURE__ */ new Set(), feedbackEdges = /* @__PURE__ */ new Set();
     const visit = (id) => {
@@ -4378,7 +4455,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       return rank.get(e.source) + rank.get(e.target);
     })();
     nodes.sort((a, b) => sortRank(a) - sortRank(b));
-    return { nodes, segments: segments2, edges: input.edges };
+    return { nodes, segments: segments2, edges: input.edges, arrowDepth: input.arrowDepth || 11 };
   }
   var options = {
     "elk.algorithm": "layered",
@@ -4387,46 +4464,46 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     "elk.randomSeed": "1",
     "elk.layered.cycleBreaking.strategy": "MODEL_ORDER",
     "elk.layered.feedbackEdges": "true",
-    "elk.spacing.nodeNode": "32",
-    "elk.layered.spacing.nodeNodeBetweenLayers": "50",
-    "elk.spacing.edgeNode": "20",
-    "elk.layered.spacing.edgeNodeBetweenLayers": "20",
+    "elk.spacing.nodeNode": "20",
+    "elk.layered.spacing.nodeNodeBetweenLayers": "3",
+    "elk.spacing.edgeNode": "10",
+    "elk.layered.spacing.edgeNodeBetweenLayers": "3",
     "elk.spacing.edgeEdge": "16",
     "elk.layered.spacing.edgeEdgeBetweenLayers": "16"
   };
-  function graphFor(model, portSides, direction) {
+  function graphFor(model, allocation, direction) {
     return {
       id: "root",
       layoutOptions: { ...options, "elk.direction": direction || "DOWN" },
-      children: model.nodes.map((n) => {
+      children: model.nodes.map((original) => {
+        const n = allocation?.nodes.get(original.id) || original;
+        const pad = n.padding || { NORTH: 21, SOUTH: 21, EAST: 0, WEST: 0 };
         const node = {
           id: n.id,
-          width: (n.envelope?.width || n.width) + LEAD2 * 2,
-          height: (n.envelope?.height || n.height) + LEAD2 * 2
+          width: (n.envelope?.width || n.width) + pad.WEST + pad.EAST,
+          height: (n.envelope?.height || n.height) + pad.NORTH + pad.SOUTH
         };
-        if (portSides) {
+        if (allocation) {
           node.layoutOptions = { "elk.portConstraints": "FIXED_POS" };
-          node.ports = SIDES.map((side) => {
-            const p = center(node, side);
-            if (n.envelope) {
-              if (side === "NORTH" || side === "SOUTH") p.x = LEAD2 + n.envelope.dx + n.width / 2;
-              else p.y = LEAD2 + n.envelope.dy + n.height / 2;
-            }
-            return { id: `${n.id}:${side}`, ...p, width: 0, height: 0, layoutOptions: { "elk.port.side": side } };
+          node.ports = n.ports.map((p) => {
+            const horizontal = p.side === "NORTH" || p.side === "SOUTH";
+            const x = horizontal ? pad.WEST + (n.envelope?.dx || 0) + p.x : p.side === "WEST" ? 0 : node.width;
+            const y = horizontal ? p.side === "NORTH" ? 0 : node.height : pad.NORTH + (n.envelope?.dy || 0) + p.y;
+            return { id: p.id, x, y, width: 0, height: 0, layoutOptions: { "elk.port.side": p.side } };
           });
         }
         return node;
       }),
       edges: model.segments.map((e) => {
-        const from = portSides ? `${e.source}:${portSides[e.id].source}` : e.source;
-        const to = portSides ? `${e.target}:${portSides[e.id].target}` : e.target;
+        const from = allocation ? `${e.id}:source` : e.source;
+        const to = allocation ? `${e.id}:target` : e.target;
         return { id: e.id, sources: [e.feedback ? to : from], targets: [e.feedback ? from : to] };
       })
     };
   }
   function sideOf2(node, p) {
-    return SIDES.slice().sort((a, b) => {
-      const point = (side) => ({ x: node.x + center(node, side).x, y: node.y + center(node, side).y });
+    return STATE_PORT_SIDES.slice().sort((a, b) => {
+      const point = (side) => ({ x: node.x + stateSidePoint(node, side).x, y: node.y + stateSidePoint(node, side).y });
       const q = point(a), r = point(b);
       const gap = (side, x) => side === "EAST" || side === "WEST" ? Math.abs(x.x - p.x) : Math.abs(x.y - p.y);
       return gap(a, q) - gap(b, r);
@@ -4437,21 +4514,24 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     const free = await layout(graphFor(model, null, direction));
     const freeNodes = new Map(free.children.map((n) => [n.id, n]));
     const bySegment = new Map(model.segments.map((e) => [e.id, e]));
+    const vertical = !["LEFT", "RIGHT"].includes(direction), axis = vertical ? "y" : "x";
+    const feedback = model.edges.filter((e) => model.segments.some((s) => s.owner === e.id && s.feedback && !s.loop)).map((e) => ({ ...e, span: Math.abs(freeNodes.get(e.source)[axis] - freeNodes.get(e.target)[axis]) })).sort((a, b) => b.span - a.span || a.id.localeCompare(b.id));
+    const channelSide = new Map(feedback.map((e, i) => [e.id, feedback.length > 1 && i === 0 ? -1 : 1]));
+    const hints = /* @__PURE__ */ new Map();
     const sides = Object.fromEntries(free.edges.map((edge, i) => {
       const s = edge.sections[0], m = bySegment.get(edge.id);
+      const start = m.feedback ? s.endPoint : s.startPoint, end = m.feedback ? s.startPoint : s.endPoint;
+      for (const [key, p] of [["source", start], ["target", end]]) {
+        const side = sideOf2(freeNodes.get(m[key]), p);
+        hints.set(`${m.id}:${key}`, side === "NORTH" || side === "SOUTH" ? p.x : p.y);
+      }
       const rotation = { DOWN: 0, LEFT: 1, UP: 2, RIGHT: 3 }[direction || "DOWN"];
-      const rotate = (side) => SIDES[(SIDES.indexOf(side) + rotation) % 4];
+      const rotate = (side) => STATE_PORT_SIDES[(STATE_PORT_SIDES.indexOf(side) + rotation) % 4];
       if (m.loop) {
         if (m.source === m.target) return [edge.id, { source: rotate("EAST"), target: rotate("NORTH") }];
-        return [edge.id, m.arrow ? { source: rotate("NORTH"), target: rotate("NORTH") } : { source: rotate("EAST"), target: rotate("WEST") }];
+        return [edge.id, m.arrow ? { source: rotate("EAST"), target: rotate("NORTH") } : { source: rotate("EAST"), target: rotate("WEST") }];
       }
-      if (m.feedback) {
-        const node = (id) => model.nodes.find((n) => n.id === id);
-        return [edge.id, {
-          source: rotate(node(m.source).kind === "label" ? "NORTH" : "EAST"),
-          target: rotate(node(m.target).kind === "label" ? "SOUTH" : "EAST")
-        }];
-      }
+      if (m.feedback) return [edge.id, { source: rotate("NORTH"), target: rotate("SOUTH") }];
       return [edge.id, {
         source: sideOf2(freeNodes.get(m.source), s.startPoint),
         target: sideOf2(freeNodes.get(m.target), s.endPoint)
@@ -4467,59 +4547,89 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         RIGHT: ["EAST", "WEST"],
         LEFT: ["WEST", "EAST"]
       }[direction || "DOWN"];
-      sides[e.id][key] = [forward[start ? 0 : 1], ...SIDES].find((s) => !n.envelope.blockedSides.includes(s));
+      sides[e.id][key] = [forward[start ? 0 : 1], ...STATE_PORT_SIDES].find((s) => !n.envelope.blockedSides.includes(s));
     }
-    const candidateFor = async (selected) => {
-      const fixed = await layout(graphFor(model, selected, direction));
+    const candidateFor = async (selected, ordering, poleTurn = 0) => {
+      for (const n of model.nodes.filter(stateCardinalOnly)) {
+        const occupied = /* @__PURE__ */ new Set();
+        for (const e of model.segments) for (const end of ["source", "target"]) if (e[end] === n.id) {
+          const desired = selected[e.id][end];
+          const fallback = [1, 3, 2].map((delta2) => STATE_PORT_SIDES[(STATE_PORT_SIDES.indexOf(desired) + delta2 + poleTurn) % 4]);
+          const side = [desired, ...fallback, ...STATE_PORT_SIDES].find((s) => !occupied.has(s));
+          if (!side) throw new Error(`unsupported: state-port-capacity:${n.id}`);
+          selected[e.id][end] = side;
+          occupied.add(side);
+        }
+      }
+      const selectedHints = new Map(hints);
+      if (ordering) for (const m of model.segments) {
+        for (const end of ["source", "target"]) {
+          if (model.nodes.find((n) => n.id === m[end]).kind !== "state") continue;
+          const side = channelSide.get(m.owner);
+          const hint = side ? (ordering === 1 ? side : ordering === 2 ? -side : ordering === 3 ? 1 : -1) * 1e6 + feedback.find((e) => e.id === m.owner).span : selectedHints.get(`${m.id}:${end}`);
+          selectedHints.set(`${m.id}:${end}`, hint);
+        }
+      }
+      const allocation = allocateStatePorts(model, selected, selectedHints);
+      const fixed = await layout(graphFor(model, allocation, direction));
       const nodes = new Map(fixed.children.map((n) => {
-        const inputNode = model.nodes.find((m) => m.id === n.id);
+        const inputNode = allocation.nodes.get(n.id);
         return [n.id, {
           ...inputNode,
-          x: n.x + LEAD2 + (inputNode.envelope?.dx || 0),
-          y: n.y + LEAD2 + (inputNode.envelope?.dy || 0)
+          x: n.x + inputNode.padding.WEST + (inputNode.envelope?.dx || 0),
+          y: n.y + inputNode.padding.NORTH + (inputNode.envelope?.dy || 0)
         }];
       }));
-      const port = (node, side) => ({ x: node.x + center(node, side).x, y: node.y + center(node, side).y });
+      const port = (node, id) => {
+        const p = allocation.ends.get(id);
+        return { x: node.x + p.x, y: node.y + p.y };
+      };
       const fixedEdges = new Map(fixed.edges.map((e) => [e.id, e]));
       const segments2 = model.segments.map((m) => {
         const e = fixedEdges.get(m.id), s = e.sections[0], endpoints = selected[e.id];
         const route = [s.startPoint, ...s.bendPoints || [], s.endPoint];
         if (m.feedback) route.reverse();
         return { ...m, sides: endpoints, points: [
-          port(nodes.get(m.source), endpoints.source),
+          port(nodes.get(m.source), `${m.id}:source`),
           ...route,
-          port(nodes.get(m.target), endpoints.target)
+          port(nodes.get(m.target), `${m.id}:target`)
         ] };
       });
       return { width: fixed.width, height: fixed.height, nodes: [...nodes.values()], segments: segments2, edges: input.edges, sides: selected };
     };
-    let best = await candidateFor(sides), quality = validateStateLayout(best);
-    if (quality.accepted) return best;
+    let best = await candidateFor(structuredClone(sides), 1), quality = validateStateLayout(best);
+    const lanePenalty = (result) => feedback.reduce((sum, e) => {
+      const byId = new Map(result.nodes.map((n) => [n.id, n])), a = byId.get(e.source), b = byId.get(e.target);
+      const label = byId.get(`${e.id}:label`);
+      if (!label) return sum;
+      const cross2 = (n) => vertical ? n.x + n.width / 2 : n.y + n.height / 2;
+      return sum + (Math.sign(cross2(label) - (cross2(a) + cross2(b)) / 2) === channelSide.get(e.id) ? 0 : 1);
+    }, 0);
     const score = (result, report) => [
       report.issues.length,
       report.intersections.length,
-      result.segments.reduce((sum, e) => sum + e.points.length, 0),
-      result.width * result.height
+      lanePenalty(result),
+      result.width * result.height,
+      result.segments.reduce((sum, e) => sum + e.points.length, 0)
     ];
     const better = (a, b) => a.some((v, i) => v < b[i] && a.slice(0, i).every((x, j) => x === b[j]));
     let bestScore = score(best, quality);
-    for (const loopTurn of [0, 1, 2, 3]) for (const mirror of [false, true]) {
-      if (!loopTurn && !mirror) continue;
+    const loopTurns = model.segments.some((e) => e.loop) ? [0, 1, 2, 3] : [0];
+    const orderings = feedback.length ? [1, 0, 2, 3, 4] : [1];
+    const alternatives = loopTurns.flatMap((loopTurn) => orderings.map((ordering) => ({ loopTurn, ordering, poleTurn: 0 })));
+    const loopOwners = [...new Set(model.segments.filter((e) => e.loop).map((e) => e.owner))];
+    if (loopOwners.length > 1) for (const loopTurn of loopTurns) alternatives.push({ loopTurn, ordering: 1, poleTurn: 0, spreadLoops: true });
+    if (model.nodes.some((n) => stateCardinalOnly(n) && model.segments.filter((e) => e.source === n.id || e.target === n.id).length > 1))
+      for (const poleTurn of [1, 2, 3]) alternatives.push({ loopTurn: 0, ordering: 1, poleTurn });
+    for (const { loopTurn, ordering, poleTurn, spreadLoops } of alternatives) {
+      if (!loopTurn && ordering === 1 && !poleTurn && !spreadLoops) continue;
       const selected = structuredClone(sides);
       for (const edge of model.segments) {
         if (edge.loop) for (const end of ["source", "target"]) {
-          selected[edge.id][end] = SIDES[(SIDES.indexOf(sides[edge.id][end]) + loopTurn) % 4];
-        }
-        else if (edge.feedback && mirror) {
-          const transverse = ["LEFT", "RIGHT"].includes(direction) ? ["NORTH", "SOUTH"] : ["EAST", "WEST"];
-          for (const end of ["source", "target"]) {
-            const index = transverse.indexOf(selected[edge.id][end]);
-            if (index >= 0) selected[edge.id][end] = transverse[1 - index];
-          }
+          selected[edge.id][end] = STATE_PORT_SIDES[(STATE_PORT_SIDES.indexOf(sides[edge.id][end]) + loopTurn + (spreadLoops ? loopOwners.indexOf(edge.owner) : 0)) % 4];
         }
       }
-      const result = await candidateFor(selected), report = validateStateLayout(result);
-      if (report.accepted) return result;
+      const result = await candidateFor(selected, ordering, poleTurn), report = validateStateLayout(result);
       const next = score(result, report);
       if (better(next, bestScore)) {
         best = result;
@@ -4586,7 +4696,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       const ids = new Set(children.map((n) => n.id));
       const edges = input.edges.filter((e) => ids.has(e.source) && ids.has(e.target));
       edges.forEach((e) => used.add(e.id));
-      const local = await solveStateScope({ nodes: measured, edges }, direction, layout);
+      const local = await solveStateScope({ nodes: measured, edges, arrowDepth: input.arrowDepth }, direction, layout);
       const nodes = [], segments2 = [...local.segments];
       for (const n of local.nodes) {
         nodes.push({ ...n, parentId: parent || void 0 });
@@ -4631,7 +4741,6 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
   // src/state-svg.js
   var NS3 = "http://www.w3.org/2000/svg";
   var DIRECTION = { TB: "DOWN", TD: "DOWN", BT: "UP", LR: "RIGHT", RL: "LEFT" };
-  var distance2 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   function placement(svg, element) {
     const m = svg.getScreenCTM().inverse().multiply(element.getScreenCTM());
     return `matrix(${m.a},${m.b},${m.c},${m.d},${m.e},${m.f})`;
@@ -4685,7 +4794,17 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         const size = title ? boundsInSvg(svg, title) : { width: 80, height: 20 };
         return { ...n, width: Math.max(80, size.width + 32), height: 48 };
       }
-      return { ...n, width: box.width, height: box.height };
+      return {
+        ...n,
+        width: box.width,
+        height: box.height,
+        // 主题CSS能覆盖rx/ry属性；容量必须使用浏览器真正画出的圆角。
+        cornerRadius: shape.localName === "rect" ? Math.max(
+          parseFloat(getComputedStyle(shape).rx) || 0,
+          parseFloat(getComputedStyle(shape).ry) || 0,
+          Number(shape.getAttribute("rx") || 0)
+        ) : 0
+      };
     });
     const edges = semantic.edges.map((e) => {
       if (!originalEdges.has(e.id)) throw new Error(`gpt-mermaid: missing state relation: ${e.id}`);
@@ -4695,19 +4814,21 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       if (e.label) views.set(`${e.id}:label`, { element: element.cloneNode(true), box, transform: placement(svg, element) });
       return { ...e, width: box.width, height: box.height };
     });
-    const candidate = await solveStateLayout({ nodes, edges }, DIRECTION[semantic.direction] || "DOWN", async (graph) => {
+    const solve2 = (arrowDepth) => solveStateLayout({ nodes, edges, arrowDepth }, DIRECTION[semantic.direction] || "DOWN", async (graph) => {
       throwIfAborted(signal);
       const result = await layout(graph);
       throwIfAborted(signal);
       return result;
     });
+    let candidate = await solve2(11);
+    if (Math.max(candidate.width, candidate.height) > 1100) candidate = await solve2(18);
     const quality = validateStateLayout(candidate);
     if (quality.unsupported || quality.issues?.length) {
       const error = new Error(`gpt-mermaid: state layout ${quality.unsupported || "constraint-conflict"}`);
       error.violations = quality.issues || quality.unmatched;
       throw error;
     }
-    const model = freezeGeometry(candidate), byId = new Map(model.nodes.map((n) => [n.id, n]));
+    const model = freezeGeometry(candidate);
     const drawing = doc.createElementNS(NS3, "g"), containers = doc.createElementNS(NS3, "g");
     const paths = doc.createElementNS(NS3, "g"), objects = doc.createElementNS(NS3, "g");
     drawing.append(containers, paths, objects);
@@ -4745,7 +4866,16 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         const view = views.get(n.id);
         if (!view) throw new Error(`gpt-mermaid: missing visual model: ${n.id}`);
         element = view.element;
-        element.setAttribute("transform", `translate(${n.x - view.box.x},${n.y - view.box.y}) ${view.transform}`);
+        const dw = n.width - view.box.width, dh = n.height - view.box.height;
+        if (dw > 0.01 || dh > 0.01) {
+          const shape = nodeShape(element) || element.querySelector("g.label rect.background,rect.labelBkg");
+          if (shape?.localName !== "rect") throw new Error(`gpt-mermaid: unsupported shape capacity:${n.id}`);
+          shape.setAttribute("x", Number(shape.getAttribute("x") || 0) - dw / 2);
+          shape.setAttribute("y", Number(shape.getAttribute("y") || 0) - dh / 2);
+          shape.setAttribute("width", Number(shape.getAttribute("width")) + dw);
+          shape.setAttribute("height", Number(shape.getAttribute("height")) + dh);
+        }
+        element.setAttribute("transform", `translate(${n.x - view.box.x + dw / 2},${n.y - view.box.y + dh / 2}) ${view.transform}`);
         if (n.kind === "label") {
           element.id = `${svg.id}-condition-${rendered.size}`;
           element.dataset.gptmLabelOwner = n.owner;
@@ -4757,7 +4887,6 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       if (n.parentId) element.dataset.gptmParent = n.parentId;
       rendered.set(n.id, element);
     }
-    const entries = [];
     for (const relation of edges) {
       const segments2 = model.segments.filter((s) => s.owner === relation.id);
       const routes = segments2.map((s) => simplifyPoints(s.points));
@@ -4772,7 +4901,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         path.dataset.gptmLogicalTarget = relation.target;
         const route = routes[index];
         path.removeAttribute("transform");
-        path.setAttribute("d", roundedPath(route, 5));
+        path.setAttribute("d", roundedPath(route, STATE_CORNER_RADIUS));
         path.setAttribute("data-points", btoa(JSON.stringify(route)));
         path.dataset.gptmSource = rendered.get(segment.source).id;
         path.dataset.gptmTarget = rendered.get(segment.target).id;
@@ -4785,23 +4914,6 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
           label.dataset.gptmLabelPorts = JSON.stringify({ incoming: routes[0].at(-1), outgoing: routes[1][0] });
         }
         paths.append(path);
-        entries.push({ path, relation: { ...segment, note: relation.note }, routes: [route] });
-      }
-    }
-    for (const start of [true, false]) {
-      const groups = /* @__PURE__ */ new Map();
-      for (const entry of entries) {
-        if (entry.relation.note) continue;
-        const route = start ? entry.routes[0] : entry.routes.at(-1).slice().reverse();
-        const p = route[0], q = route[1], length = distance2(p, q);
-        const key = `${start ? entry.relation.source : entry.relation.target}:${p.x}:${p.y}:${Math.round((q.x - p.x) / length)}:${Math.round((q.y - p.y) / length)}`;
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key).push(entry);
-      }
-      for (const group of groups.values()) if (group.length > 1) {
-        const owner = group[0].path.dataset.id;
-        for (const entry of group) entry.path.setAttribute(start ? "data-gptm-shared-start" : "data-gptm-shared-tip", owner);
-        if (!start) for (const entry of group.slice(1)) entry.path.removeAttribute("marker-end");
       }
     }
     const definitions = [...svg.querySelectorAll("defs")].map((d) => d.cloneNode(true));
@@ -5110,19 +5222,19 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       return !contains({ x: anchor.x - vector2.x * 2, y: anchor.y - vector2.y * 2 }) && contains({ x: anchor.x + vector2.x * 2, y: anchor.y + vector2.y * 2 });
     }).sort((a, b) => a.box.width * a.box.height - b.box.width * b.box.height);
     for (const { box, contains, area } of candidates) {
-      const position = (distance3) => ({ x: anchor.x + vector2.x * distance3, y: anchor.y + vector2.y * distance3 });
-      const inside = (distance3) => area(position(distance3));
+      const position = (distance2) => ({ x: anchor.x + vector2.x * distance2, y: anchor.y + vector2.y * distance2 });
+      const inside = (distance2) => area(position(distance2));
       const reach = Math.max(4, Math.abs(vector2.x) * box.width + Math.abs(vector2.y) * box.height);
       let outside = -2;
       if (inside(outside)) continue;
       let hit = null;
       for (let step = 0; step <= 96; step++) {
-        const distance3 = -2 + (reach + 2) * step / 96;
-        if (inside(distance3)) {
-          hit = distance3;
+        const distance2 = -2 + (reach + 2) * step / 96;
+        if (inside(distance2)) {
+          hit = distance2;
           break;
         }
-        outside = distance3;
+        outside = distance2;
       }
       if (hit === null) continue;
       for (let iteration = 0; iteration < 20; iteration++) {
@@ -5846,10 +5958,10 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
           const active = gesture.ids.map((id) => pointers.get(id));
           const x = active.reduce((sum, p) => sum + p.x, 0) / active.length;
           const y = active.reduce((sum, p) => sum + p.y, 0) / active.length;
-          const distance3 = active.length === 2 ? Math.hypot(active[1].x - active[0].x, active[1].y - active[0].y) : 0;
-          const ratio = gesture.distance > 1 ? distance3 / gesture.distance : 1;
+          const distance2 = active.length === 2 ? Math.hypot(active[1].x - active[0].x, active[1].y - active[0].y) : 0;
+          const ratio = gesture.distance > 1 ? distance2 / gesture.distance : 1;
           zoom(record, gesture.fromZoom * ratio, false, { ...gesture, toX: x, toY: y });
-          if (gesture && gesture.distance <= 1 && distance3 > 1) rebase();
+          if (gesture && gesture.distance <= 1 && distance2 > 1) rebase();
         },
         end(event) {
           const active = gesture?.ids.includes(event.pointerId);

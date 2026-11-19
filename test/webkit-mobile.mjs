@@ -10,6 +10,7 @@ import { auditDetailOverlaps } from "./detail-overlaps.mjs";
 import { verifyPracticalVariants } from "./practical-variants.mjs";
 import { verifyTouchGestures } from "./touch-gestures.mjs";
 import { BASE_GEOMETRY_EXPECTATIONS } from "./geometry-expectations.mjs";
+import { verifyStateIndependentVariants } from "./state-independent-variants.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."), port = 4175;
 const output = path.join(root, "output/playwright/webkit");
@@ -39,6 +40,7 @@ try {
   await auditArrowContacts(page, output, true, BASE_GEOMETRY_EXPECTATIONS);
   await auditDetailOverlaps(page, output, true, BASE_GEOMETRY_EXPECTATIONS);
   const variants = await verifyPracticalVariants(page, path.join(output, "variants"));
+  const statePorts = await verifyStateIndependentVariants(page, path.join(output,"independent-state-ports"));
   await page.locator('#search').fill("state");
   const touch = await verifyTouchGestures(page, { mode: "synthetic", output });
   await page.locator('#state [data-fullscreen]').tap();
@@ -54,7 +56,7 @@ try {
   await page.screenshot({ path: path.join(output, "state-mobile.png") });
   assert.deepEqual(errors, []);
   await fs.writeFile(path.join(output, "mobile-report.json"), JSON.stringify({
-    ...summary, variants: variants.length, touch, errors,
+    ...summary, variants: variants.length, statePorts: statePorts.length, touch, errors,
     touchLimit: "开关与复位使用locator.tap；多指/取消/捕获为合成PointerEvent，未证明WebKit原生多指或页面触摸滚动。",
   }, null, 2));
   console.log(`WebKit手机视口验收通过：${summary.ready}图，${variants.length}变体，tap开关复位；${touch.checks.length}项合成触点状态机检查，未计作真机多指或原生滚动`);

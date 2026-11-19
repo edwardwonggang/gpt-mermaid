@@ -52,7 +52,7 @@ export async function solveStateLayout(input, direction = "DOWN", layout) {
     const ids = new Set(children.map(n => n.id));
     const edges = input.edges.filter(e => ids.has(e.source) && ids.has(e.target));
     edges.forEach(e => used.add(e.id));
-    const local = await solveStateScope({ nodes: measured, edges }, direction, layout);
+    const local = await solveStateScope({ nodes: measured, edges, arrowDepth:input.arrowDepth }, direction, layout);
     const nodes = [], segments = [...local.segments];
     for (const n of local.nodes) {
       nodes.push({ ...n, parentId: parent || undefined });

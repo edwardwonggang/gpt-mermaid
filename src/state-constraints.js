@@ -1,9 +1,10 @@
-/* 职责：只读验证冻结状态布局的语义、中点、引线、障碍与交叉约束。
+/* 职责：只读验证冻结状态布局的语义、独立端口、局部引线与几何安全。
  * 调用方：state-svg及逻辑测试；依赖：纯几何segmentIntersection。
  * 红线：检查失败不能改坐标或冒充clear，条件框与状态框执行同一约束。
  */
 import { segmentIntersection } from "./path-intersections.js";
-const EPS = .01, LEAD = 40, GAP = 10;
+import { statePortLead, STATE_PORT_GAP, stateCardinalOnly } from "./state-ports.js";
+const EPS = .01, GAP = 10;
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 function simplify(points) {
   const out = [];
@@ -28,22 +29,6 @@ function blocked(a, b, n, pad = GAP) {
     { x: n.x + n.width + pad, y: n.y + n.height + pad }, { x: n.x - pad, y: n.y + n.height + pad },
   ];
   return corners.some((p, i) => segmentIntersection(a, b, p, corners[(i + 1) % 4])?.kind === "cross");
-}
-function commonPrefix(left, right) {
-  let a = left[0], b = right[0], i = 1, j = 1;
-  const shared = [];
-  while (i < left.length && j < right.length && dist(a, b) < EPS) {
-    const p = left[i], q = right[j], al = dist(a, p), bl = dist(b, q);
-    const u = { x: (p.x - a.x) / al, y: (p.y - a.y) / al };
-    const v = { x: (q.x - b.x) / bl, y: (q.y - b.y) / bl };
-    if (dist(u, v) > EPS) break;
-    const end = al < bl ? p : q;
-    shared.push([a, end]);
-    a = end; b = end;
-    if (al <= bl + EPS) i++;
-    if (bl <= al + EPS) j++;
-  }
-  return shared;
 }
 export function validateStateLayout(model) {
   if (model.status === "unsupported") return { accepted: false, unsupported: model.reason, unmatched: model.unmatched };
@@ -96,12 +81,16 @@ export function validateStateLayout(model) {
         { side: "SOUTH", x: n.x + n.width / 2, y: n.y + n.height, vx: 0, vy: 1 },
         { side: "WEST", x: n.x, y: n.y + n.height / 2, vx: -1, vy: 0 },
         { side: "EAST", x: n.x + n.width, y: n.y + n.height / 2, vx: 1, vy: 0 },
-      ].sort((a, b) => dist(a, p) - dist(b, p));
+      ].sort((a, b) => Math.abs(a.vx ? a.x-p.x : a.y-p.y)-Math.abs(b.vx ? b.x-p.x : b.y-p.y));
       const port = centers[0], lead = (q.x - p.x) * port.vx + (q.y - p.y) * port.vy;
       const normalError = Math.abs((q.x - p.x) * port.vy - (q.y - p.y) * port.vx);
-      ports.push({ segment: e.id, node: n.id, side: port.side, middleError: dist(port, p), lead, normalError });
-      if (dist(port, p) > EPS || normalError > EPS) issue("G02", e.id, ports.at(-1));
-      if (lead < LEAD - EPS) issue("G03", e.id, ports.at(-1));
+      const offset = port.vx ? p.y-port.y : p.x-port.x;
+      const contourGap = Math.abs(port.vx ? p.x-port.x : p.y-port.y);
+      ports.push({ segment: e.id, node: n.id, side: port.side, middleError: Math.abs(offset),
+        offset, contourGap, lead, normalError, arrow: !start && e.arrow });
+      if (contourGap > EPS || normalError > EPS || stateCardinalOnly(n) && Math.abs(offset)>EPS)
+        issue("G02", e.id, ports.at(-1));
+      if (lead < statePortLead(!start && e.arrow,n.arrowDepth) - EPS) issue("G03", e.id, ports.at(-1));
     }
     for (let i = 1; i < e.points.length; i++) {
       const a = e.points[i - 1], b = e.points[i];
@@ -122,6 +111,24 @@ export function validateStateLayout(model) {
       }
     }
   }
+  for (const n of nodes.values()) for (const side of ["NORTH","EAST","SOUTH","WEST"]) {
+    const assigned = ports.filter(p=>p.node===n.id&&p.side===side).sort((a,b)=>a.offset-b.offset);
+    if (!assigned.length) continue;
+    const span = side === "NORTH" || side === "SOUTH" ? n.width : n.height;
+    const radius = n.cornerRadius ?? (n.kind==="label"?13:12);
+    const footprint = assigned.some(p=>p.arrow) ? (n.arrowDepth||11)*.4+1 : 1;
+    // 负容量必须保留：截成零会让不足以容纳箭头的单个居中端口假通过。
+    const usable = span/2-(stateCardinalOnly(n)?span/2:radius+footprint);
+    if (Math.abs(assigned[0].offset+assigned.at(-1).offset)>EPS
+      || assigned.some(p=>Math.abs(p.offset)>usable+EPS)) issue("G02",n.id,`端口组未居中或越过安全直边:${side}`);
+    for (let i=1;i<assigned.length;i++) if (assigned[i].offset-assigned[i-1].offset<STATE_PORT_GAP-EPS)
+      issue("G08",n.id,`端口共用或间距不足:${side}`);
+  }
+  const opposite={NORTH:"SOUTH",SOUTH:"NORTH",EAST:"WEST",WEST:"EAST"};
+  for(const n of nodes.values()) if(n.kind==="label"){
+    const ends=ports.filter(p=>p.node===n.id);
+    if(ends.length!==2||opposite[ends[0].side]!==ends[1].side) issue("G04",n.id,"条件框须从相对两侧连接");
+  }
   const boxes = [...nodes.values()];
   for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
     const a = boxes[i], b = boxes[j];
@@ -129,16 +136,27 @@ export function validateStateLayout(model) {
     if (a.x < b.x + b.width + GAP && a.x + a.width + GAP > b.x
         && a.y < b.y + b.height + GAP && a.y + a.height + GAP > b.y) issue("G05", a.id, `框与框距离不足:${b.id}`);
   }
+  for (const n of boxes) if (n.parentId && nodes.has(n.parentId)) {
+    const parent = nodes.get(n.parentId);
+    if (n.x<parent.x-EPS || n.y<parent.y-EPS || n.x+n.width>parent.x+parent.width+EPS
+      || n.y+n.height>parent.y+parent.height+EPS) issue("G05", n.id, "子对象超出所属容器");
+  }
+  for(const e of segments){
+    const a=nodes.get(e.source),b=nodes.get(e.target);
+    if(!a.parentId||a.parentId!==b.parentId)continue;
+    const parent=nodes.get(a.parentId);
+    if(parent&&e.points.some(p=>p.x<parent.x-EPS||p.y<parent.y-EPS
+      ||p.x>parent.x+parent.width+EPS||p.y>parent.y+parent.height+EPS))
+      issue("G05",e.id,"内部关系超出所属容器");
+  }
   const intersections = [];
   for (let i = 0; i < segments.length; i++) for (let j = i + 1; j < segments.length; j++) {
-    const a = segments[i], b = segments[j], shared = [];
-    if (a.source === b.source) shared.push(...commonPrefix(a.points, b.points));
-    if (a.target === b.target) shared.push(...commonPrefix(a.points.slice().reverse(), b.points.slice().reverse()));
+    const a = segments[i], b = segments[j];
     for (let p = 1; p < a.points.length; p++) for (let q = 1; q < b.points.length; q++) {
       const hit = segmentIntersection(a.points[p - 1], a.points[p], b.points[q - 1], b.points[q]);
       if (!hit) continue;
-      const onShared = shared.some(([x, y]) => Math.abs(dist(x, hit) + dist(hit, y) - dist(x, y)) < EPS);
-      if (!onShared) intersections.push({ a: a.id, b: b.id, ...hit });
+      intersections.push({ a: a.id, b: b.id, ...hit });
+      if (hit.kind === "overlap" || hit.kind === "touch") issue("G08", a.id, `关系与${b.id}重叠或接触`);
     }
   }
   return { logicalNodes: model.nodes.filter(n => n.kind === "state").length,

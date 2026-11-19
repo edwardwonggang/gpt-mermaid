@@ -17,6 +17,7 @@ import { verifyTouchGestures } from "./touch-gestures.mjs";
 import { BASE_GEOMETRY_EXPECTATIONS } from "./geometry-expectations.mjs";
 import { inspectStatePorts } from "./state-ports.mjs";
 import { inspectStateLayout } from "./state-layout-geometry.mjs";
+import { verifyStateIndependentVariants } from "./state-independent-variants.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.GPT_MERMAID_TEST_PORT || 4173);
@@ -274,9 +275,9 @@ DONE --> DISABLED: 使能置 0`;
   const centeredPorts = await page.evaluate(inspectStatePorts, programmatic.stateSvg);
   assert.equal(centeredPorts.length, 19, "10条业务边含9个条件框，共19段显示线");
   for (const edge of centeredPorts) for (const port of edge.endpoints) {
-    assert(port.middleError < 0.1 && port.contourGap < 1, `端口必须在声明框的边中点：${JSON.stringify({ edge, port })}`);
-    assert(port.controlLead >= 40 - 0.05 && port.normalError < 0.1,
-      `框外必须保留32单位可见直线后再转弯：${JSON.stringify({ edge, port })}`);
+    assert(port.groupCenterError < 0.1 && port.contourGap < 1.3, `独立端口组必须居中并接触真实轮廓：${JSON.stringify({ edge, port })}`);
+    assert(port.visibleLead >= 16 - 0.1 && port.normalError < 0.1,
+      `扣除箭头后仍须保留16单位可见法向直线：${JSON.stringify({ edge, port })}`);
   }
   await fs.writeFile(path.join(output, "centered-ports-report.json"), JSON.stringify(centeredPorts, null, 2));
   const completeState = await page.evaluate(inspectStateLayout, programmatic.stateSvg);
@@ -284,7 +285,11 @@ DONE --> DISABLED: 使能置 0`;
   assert.equal(completeState.logicalEdges, 10);
   assert.equal(completeState.labels.length, 9);
   assert.equal(completeState.ports.length, 38);
-  assert.deepEqual(completeState.issues, [], "所有状态框和条件框须满足中点、直段及避障");
+  assert.deepEqual(completeState.issues, [], "所有状态框和条件框须满足独立端口、直段及避障");
+  assert.equal(completeState.markerCount,10,"每条业务关系必须有独立箭头");
+  const stateSize=await page.evaluate(markup=>{const s=new DOMParser().parseFromString(markup,"image/svg+xml").documentElement;
+    return s.getAttribute("viewBox").split(/[ ,]+/).map(Number).slice(2);},programmatic.stateSvg);
+  assert(stateSize[0]<=700&&stateSize[1]<=1000,`原字号紧凑预算:${stateSize}`);
   await fs.writeFile(path.join(output, "state-layout-geometry.json"), JSON.stringify(completeState, null, 2));
   assert.equal(programmatic.stateRouting.status, "clear", JSON.stringify(programmatic.stateRouting));
   assert.equal(programmatic.stateRouting.crossings, 0, JSON.stringify(programmatic.stateRouting));
@@ -472,17 +477,19 @@ Charge --> Pack[Pack order] --> Ship[Ship parcel] --> Deliver[Confirm delivery] 
     assert.equal(ports.length, geometry.logicalEdges + geometry.labels.length, `${sample.id} 条件框必须连接两段线`);
     assert.deepEqual(geometry.issues, [], `${sample.id} 全框几何约束`);
     for (const edge of ports) {
-      assert(edge.sharedArrowValid, `共享箭头与实际末段不一致：${sample.id} ${edge.id}`);
+      assert(edge.sharedArrowValid, `状态关系不能共享端段：${sample.id} ${edge.id}`);
       for (const port of edge.endpoints) {
-        assert(port.middleError < .1 && port.contourGap < 1.2,
-          `状态图端口偏离中点：${sample.id} ${JSON.stringify({edge,port})}`);
-        assert(port.controlLead >= 39.9 && port.normalError < .1,
+        assert(port.groupCenterError < .1 && port.contourGap < 1.3,
+          `状态图独立端口组未居中或脱离轮廓：${sample.id} ${JSON.stringify({edge,port})}`);
+        assert(port.visibleLead >= 15.9 && port.normalError < .1,
           `状态图首尾直线不足：${sample.id} ${JSON.stringify({edge,port})}`);
       }
     }
     stateGalleryPorts.push({id:sample.id,ports,logicalEdges:geometry.logicalEdges,labels:geometry.labels});
   }
   await fs.writeFile(path.join(output, "state-gallery-ports.json"), JSON.stringify(stateGalleryPorts, null, 2));
+  const stateVariants=await verifyStateIndependentVariants(page,path.join(output,"playwright","independent-state-ports"));
+  console.log(`状态独立端口：${stateVariants.length}个方向/字体/多自环/稠密变体通过`);
   const details = await auditDetailOverlaps(page, path.join(output, "playwright", "detail-audit"), true, BASE_GEOMETRY_EXPECTATIONS);
   const crossingReport = await verifyCrossingQuality(page, path.join(output, "playwright", "route-quality"));
   const contacts = await auditArrowContacts(page, path.join(output, "playwright", "arrow-detail"), true, BASE_GEOMETRY_EXPECTATIONS);

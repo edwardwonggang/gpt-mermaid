@@ -117,9 +117,9 @@ Completed --> [*]`);
       assert.deepEqual(sample.stateGeometry.issues, [], `${sample.id} 条件框或状态框端口失败`);
       assert.equal(sample.ports.length, sample.routing.checkedEdges, `${sample.id} 端口检查不能遗漏边`);
       for (const edge of sample.ports) for (const port of edge.endpoints) {
-        assert(edge.sharedArrowValid && port.middleError < .1 && port.contourGap < 1.2
-          && port.controlLead >= 39.9 && port.normalError < .1,
-        `${sample.id} ${edge.id} 未满足中点及法向引线：${JSON.stringify(port)}`);
+        assert(edge.sharedArrowValid && port.groupCenterError < .1 && port.contourGap < 1.3
+          && port.visibleLead >= 15.9 && port.normalError < .1,
+        `${sample.id} ${edge.id} 未满足独立端口组及法向引线：${JSON.stringify(port)}`);
       }
     }
   }

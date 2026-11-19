@@ -151,7 +151,7 @@ test("G01 反馈和自环保留业务方向，显示展开不修改调用方输�
 });
 
 test("G01/G02/G03 冻结正例同时验状态和标签端口，验证器不得修改冗余共线点", () => {
-  assert.equal(STATE_LAYOUT_LEAD, 40);
+  assert.equal(STATE_LAYOUT_LEAD, 21);
   const report = accepted(labelled(), "两段标签关系的四个中点端口应合格");
   assert.equal(report.logicalNodes, 2); assert.equal(report.logicalEdges, 1);
   assert.equal(report.labels, 1); assert.equal(report.displaySegments, 2);
@@ -167,8 +167,8 @@ test("G02 条件框偏心不能因为业务状态端点正确而通过", () => {
   assert(report.ports.some(port => port.node === "ab:label" && port.middleError >= 6));
 });
 
-test("G03 框内折返或不足40的首段不能因最后端点仍在中点而通过", async t => {
-  for (const lead of [-20, 20, 39]) await t.test(`法向首段${lead}`, () => {
+test("G03 框内折返或不足局部引线的首段必须拒绝", async t => {
+  for (const lead of [-20, 0, 20]) await t.test(`法向首段${lead}`, () => {
     const model = labelled();
     model.segments[0].points = [[80, 30], [80 + lead, 30], [80 + lead, -60],
       [160, -60], [160, 30], [200, 30]].map(([x, y]) => point(x, y));
@@ -260,9 +260,9 @@ function branching(reverse = false) {
   return model;
 }
 
-test("G08 七分支同向共享中点公共前缀/后缀合法，所有关系和箭头仍保留", () => {
+test("G08 七分支不得复用中点和公共前缀后缀，逻辑关系保留也不能掩盖视觉混并", () => {
   for (const reverse of [false, true]) {
-    const report = accepted(branching(reverse), reverse ? "七路汇入共享后缀" : "七路出边共享前缀");
+    const report = rejected(branching(reverse), "G08", reverse ? "七路汇入共享后缀" : "七路出边共享前缀");
     assert.equal(report.logicalNodes, 8); assert.equal(report.logicalEdges, 7); assert.equal(report.displaySegments, 7);
     const ports = report.ports.filter(port => port.node === "hub");
     assert.equal(ports.length, 7); assert(ports.every(port => port.side === "EAST" && port.middleError === 0));
@@ -298,12 +298,14 @@ test("G02/G03/G11 注入确定性布局的四方向均固定中点端口，重�
     assert(stub.calls.every(graph => graph.layoutOptions["elk.direction"] === direction));
     assert(stub.calls[0].children.every(n => !n.ports));
     for (const n of stub.calls[1].children) {
-      assert.equal(n.layoutOptions["elk.portConstraints"], "FIXED_POS"); assert.equal(n.ports.length, 4);
+      assert.equal(n.layoutOptions["elk.portConstraints"], "FIXED_POS");
+      assert(n.ports.length <= 2, "串行关系仅创建实际使用的独立端口");
+      assert.equal(new Set(n.ports.map(p=>p.id)).size,n.ports.length);
       const bySide = new Map(n.ports.map(p => [p.layoutOptions["elk.port.side"], p]));
-      assert.deepEqual([bySide.get("NORTH").x, bySide.get("NORTH").y], [n.width / 2, 0]);
-      assert.deepEqual([bySide.get("SOUTH").x, bySide.get("SOUTH").y], [n.width / 2, n.height]);
-      assert.deepEqual([bySide.get("WEST").x, bySide.get("WEST").y], [0, n.height / 2]);
-      assert.deepEqual([bySide.get("EAST").x, bySide.get("EAST").y], [n.width, n.height / 2]);
+      if(bySide.has("NORTH")) assert.deepEqual([bySide.get("NORTH").x, bySide.get("NORTH").y], [n.width / 2, 0]);
+      if(bySide.has("SOUTH")) assert.deepEqual([bySide.get("SOUTH").x, bySide.get("SOUTH").y], [n.width / 2, n.height]);
+      if(bySide.has("WEST")) assert.deepEqual([bySide.get("WEST").x, bySide.get("WEST").y], [0, n.height / 2]);
+      if(bySide.has("EAST")) assert.deepEqual([bySide.get("EAST").x, bySide.get("EAST").y], [n.width, n.height / 2]);
     }
     const second = await solveStateLayout(input, direction, stub.layout);
     assert.deepEqual(first, second); assert.deepEqual(input, before);

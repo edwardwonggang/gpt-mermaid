@@ -6,12 +6,10 @@ import { solveStateLayout } from "./state-layout.js";
 import { validateStateLayout } from "./state-constraints.js";
 import { boundsInSvg, nodeShape, simplifyPoints, roundedPath } from "./svg-routing.js";
 import { throwIfAborted } from "./runtime-guard.js";
+import { STATE_CORNER_RADIUS } from "./state-ports.js";
 
 const NS = "http://www.w3.org/2000/svg";
 const DIRECTION = { TB: "DOWN", TD: "DOWN", BT: "UP", LR: "RIGHT", RL: "LEFT" };
-const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-const point = (svg, element, p) => new DOMPoint(p.x, p.y)
-  .matrixTransform(element.getScreenCTM()).matrixTransform(svg.getScreenCTM().inverse());
 
 function placement(svg, element) {
   const m = svg.getScreenCTM().inverse().multiply(element.getScreenCTM());
@@ -64,7 +62,10 @@ export async function layoutStateSvg(svg, semantic, layout, variables, signal) {
       const size = title ? boundsInSvg(svg, title) : { width: 80, height: 20 };
       return { ...n, width: Math.max(80, size.width + 32), height: 48 };
     }
-    return { ...n, width: box.width, height: box.height };
+    return { ...n, width: box.width, height: box.height,
+      // 主题CSS能覆盖rx/ry属性；容量必须使用浏览器真正画出的圆角。
+      cornerRadius: shape.localName === "rect" ? Math.max(parseFloat(getComputedStyle(shape).rx)||0,
+        parseFloat(getComputedStyle(shape).ry)||0,Number(shape.getAttribute("rx")||0)) : 0 };
   });
   const edges = semantic.edges.map(e => {
     if (!originalEdges.has(e.id)) throw new Error(`gpt-mermaid: missing state relation: ${e.id}`);
@@ -74,19 +75,23 @@ export async function layoutStateSvg(svg, semantic, layout, variables, signal) {
     if (e.label) views.set(`${e.id}:label`, { element: element.cloneNode(true), box, transform: placement(svg, element) });
     return { ...e, width: box.width, height: box.height };
   });
-  const candidate = await solveStateLayout({ nodes, edges }, DIRECTION[semantic.direction] || "DOWN", async graph => {
+  const solve = arrowDepth => solveStateLayout({ nodes, edges, arrowDepth }, DIRECTION[semantic.direction] || "DOWN", async graph => {
     throwIfAborted(signal);
     const result = await layout(graph);
     throwIfAborted(signal);
     return result;
   });
+  let candidate = await solve(11);
+  // 最终着色按完整画布把三角放大至最多18；复合图内部也须使用同一上界，
+  // 避免外层变大后内部节点仍只预留小箭头的直段。最多整体重算一次。
+  if (Math.max(candidate.width,candidate.height)>1100) candidate = await solve(18);
   const quality = validateStateLayout(candidate);
   if (quality.unsupported || quality.issues?.length) {
     const error = new Error(`gpt-mermaid: state layout ${quality.unsupported || "constraint-conflict"}`);
     error.violations = quality.issues || quality.unmatched;
     throw error;
   }
-  const model = freezeGeometry(candidate), byId = new Map(model.nodes.map(n => [n.id, n]));
+  const model = freezeGeometry(candidate);
   const drawing = doc.createElementNS(NS, "g"), containers = doc.createElementNS(NS, "g");
   const paths = doc.createElementNS(NS, "g"), objects = doc.createElementNS(NS, "g");
   drawing.append(containers, paths, objects);
@@ -111,7 +116,17 @@ export async function layoutStateSvg(svg, semantic, layout, variables, signal) {
       const view = views.get(n.id);
       if (!view) throw new Error(`gpt-mermaid: missing visual model: ${n.id}`);
       element = view.element;
-      element.setAttribute("transform", `translate(${n.x - view.box.x},${n.y - view.box.y}) ${view.transform}`);
+      const dw = n.width-view.box.width, dh = n.height-view.box.height;
+      if (dw > .01 || dh > .01) {
+        const shape = nodeShape(element) || element.querySelector("g.label rect.background,rect.labelBkg");
+        if (shape?.localName !== "rect") throw new Error(`gpt-mermaid: unsupported shape capacity:${n.id}`);
+        // 只扩大框，文字保持原字号与局部中心；不能缩放整个g来换取端口容量。
+        shape.setAttribute("x", Number(shape.getAttribute("x") || 0)-dw/2);
+        shape.setAttribute("y", Number(shape.getAttribute("y") || 0)-dh/2);
+        shape.setAttribute("width", Number(shape.getAttribute("width"))+dw);
+        shape.setAttribute("height", Number(shape.getAttribute("height"))+dh);
+      }
+      element.setAttribute("transform", `translate(${n.x - view.box.x + dw/2},${n.y - view.box.y + dh/2}) ${view.transform}`);
       if (n.kind === "label") {
         element.id = `${svg.id}-condition-${rendered.size}`;
         element.dataset.gptmLabelOwner = n.owner;
@@ -123,7 +138,6 @@ export async function layoutStateSvg(svg, semantic, layout, variables, signal) {
     if (n.parentId) element.dataset.gptmParent = n.parentId;
     rendered.set(n.id, element);
   }
-  const entries = [];
   for (const relation of edges) {
     const segments = model.segments.filter(s => s.owner === relation.id);
     const routes = segments.map(s => simplifyPoints(s.points));
@@ -138,7 +152,7 @@ export async function layoutStateSvg(svg, semantic, layout, variables, signal) {
     path.dataset.gptmLogicalTarget = relation.target;
     const route = routes[index];
     path.removeAttribute("transform");
-    path.setAttribute("d", roundedPath(route, 5));
+    path.setAttribute("d", roundedPath(route, STATE_CORNER_RADIUS));
     path.setAttribute("data-points", btoa(JSON.stringify(route)));
     path.dataset.gptmSource = rendered.get(segment.source).id;
     path.dataset.gptmTarget = rendered.get(segment.target).id;
@@ -151,23 +165,6 @@ export async function layoutStateSvg(svg, semantic, layout, variables, signal) {
       label.dataset.gptmLabelPorts = JSON.stringify({ incoming: routes[0].at(-1), outgoing: routes[1][0] });
     }
     paths.append(path);
-    entries.push({ path, relation: { ...segment, note: relation.note }, routes: [route] });
-    }
-  }
-  for (const start of [true, false]) {
-    const groups = new Map();
-    for (const entry of entries) {
-      if (entry.relation.note) continue;
-      const route = start ? entry.routes[0] : entry.routes.at(-1).slice().reverse();
-      const p = route[0], q = route[1], length = distance(p, q);
-      const key = `${start ? entry.relation.source : entry.relation.target}:${p.x}:${p.y}:${Math.round((q.x-p.x)/length)}:${Math.round((q.y-p.y)/length)}`;
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(entry);
-    }
-    for (const group of groups.values()) if (group.length > 1) {
-      const owner = group[0].path.dataset.id;
-      for (const entry of group) entry.path.setAttribute(start ? "data-gptm-shared-start" : "data-gptm-shared-tip", owner);
-      if (!start) for (const entry of group.slice(1)) entry.path.removeAttribute("marker-end");
     }
   }
   // defs/style/标题保持；旧布局图元一次替换，之后只允许着色、裁线与只读验收。

@@ -42,8 +42,8 @@ Blob URL → <img> → zoom/pan/fullscreen UI
 13. `src/planar-layout.js`：平坦少量关系的结构化外围环/重心候选；只返回非退化零交叉坐标，实际矩形和标签由SVG层另验。
 14. `src/runtime-guard.js`：统一超时、`AbortSignal` 与严格串行调度；排队项可取消，执行槽仅在真实任务结束后释放。
 15. `src/runtime-loader.js`：按document/URL共享下载、捕获所属script的实际导出、失败清理及重试；不隐式接管任意全局Mermaid。
-16. `src/state-model.js`、`state-layout.js`：同次解析语义、条件框、固定中点、引线预留、反馈边和复合状态统一布局；复用runtime已内嵌ELK。
-17. `src/state-constraints.js`：只读验证语义完整性、端口、直段、障碍和共享规则；`state-svg.js`消费冻结结果一次绘制，条件关系显示为两段path且保留同一owner。
+16. `src/state-model.js`、`state-layout.js`：同次解析语义、条件框、独立端口、局部引线、反馈通道和复合状态统一布局；复用runtime已内嵌ELK。`state-ports.js`按真实尺寸分配每个连接端，容量不足只扩大所需维度。
+17. `src/state-constraints.js`：只读验证语义完整性、居中端口组、直段、障碍、容器包含关系和独立路线；`state-svg.js`消费冻结结果一次绘制，条件关系显示为两段path且保留同一owner，不合并状态关系的箭头。
 
 The runtime is intentionally loaded lazily. A page that never renders a Mermaid
 diagram does not pay the 5.4 MB runtime cost.
@@ -74,10 +74,13 @@ rejects the wait with `TimeoutError` / `AbortError`。实际执行仍在进行�
 - Arrow height is measured from base midpoint to tip, along its direction. Every triangle uses the same 10:8 geometry and scales uniformly.
 - Layout `data-points` identifies connection anchors; browser `isPointInFill()` identifies actual contour intersections. A bounding box alone does not prove contact.
 - 流程节点归属使用 `db.getData().nodes/edges`，不解析 ID 子串或匹配标签文字；边重排后再次验证非目标节点碰撞。
-- 状态图端口固定在四边中点，使用40单位控制引线保证圆角后至少32单位法向路径。
-  同向同侧在框外分叉/汇合，只共享可证明连续的首/尾段；共享末端显示一个三角，但保留每条逻辑边和标签。
+- 状态图单连接端居中，同侧多个入出端围绕中心独立分配；端口顺序随反馈通道共同求解。
+  每条关系保留独立箭头，不允许不同owner共用正长度线路。法向引线按可见线杆16、圆角4、
+  描边余量及实际箭头尺寸分别预留；只在有连接的方向占位，不对所有框统一增加80宽高。
+  真实圆角使用computed值，端口容量包含箭头底宽；小圆/菱形只使用合法极点。
   复合状态外框来自`g.statediagram-cluster[data-id]`，内部路由不把自己的祖先填充区当障碍。
-  每次改路清除旧标签预留点；标签位置必须属于当前路径。
+  反向关系先从业务图识别，再展开条件框；多个自环的上游虚拟ID绑定原关系ID，防止测量阶段丢边。
+  候选在固定数量内按违反项、交叉、反馈分侧与面积比较，已可行解仍参与紧凑择优。
 - 非状态图仍保留原后处理；状态图为文字/尺寸测量 → 语义与条件框统一布局 → 全约束验证 → 绘制 → 实际轮廓贴边 → 方向色、箭头与裁线 → 最终几何报告。不能再次调用旧标签投影或通用改路破坏已验收几何。
 - 折返不改图源、不镜像文字。反馈、跨层和子图等无安全切口的情况明确保留原布局。
 - 不以图名、节点文字或源码关键词选择避障分支。原路径可用时保留；候选必须检查完整路径的自交、重走、长度及折弯。

@@ -333,6 +333,29 @@ js = replaceOnce(
         svgPath.attr("data-target", edge.end);`
 );
 
+// 上游按nodeId命名自环虚拟节点和段，多条同节点自环相互覆盖。
+// 状态图测量必须保留每个原edge.id；其它图种保持其既有内部ID。
+js = replaceOnce(js, '状态自环虚拟节点使用关系身份',
+  `            const nodeId = edge.start;
+            const specialId1 = nodeId + "---" + nodeId + "---1";
+            const specialId2 = nodeId + "---" + nodeId + "---2";`,
+  `            const nodeId = edge.start;
+            const loopKey = data4Layout.type === "stateDiagram" ? nodeId + "-" + edge.id : nodeId;
+            const specialId1 = loopKey + "---" + nodeId + "---1";
+            const specialId2 = loopKey + "---" + nodeId + "---2";`);
+for (const suffix of ["1", "mid", "2"]) {
+  const target = suffix === "1" ? "edge1" : suffix === "mid" ? "edgeMid" : "edge2";
+  js = replaceOnce(js, `状态自环显示段身份${suffix}`,
+    `${target}.id = nodeId + "-cyclic-special-${suffix}";`,
+    `${target}.id = loopKey + "-cyclic-special-${suffix}";`);
+}
+for (const [from, to, value, suffix] of [
+  ["nodeId","specialId1","edge1","0"], ["specialId1","specialId2","edgeMid","1"],
+  ["specialId2","nodeId","edge2","2"],
+]) js = replaceOnce(js, `状态自环图边身份${suffix}`,
+  `graph.setEdge(${from}, ${to}, ${value}, nodeId + "-cyclic-special-${suffix}");`,
+  `graph.setEdge(${from}, ${to}, ${value}, loopKey + "-cyclic-special-${suffix}");`);
+
 // 状态图统一布局直接消费已内嵌的ELK，不再下载第二份引擎。
 // 仅暴露普通数据图布局；语义、端口和最终验收由独立模块负责。
 js = replaceOnce(
