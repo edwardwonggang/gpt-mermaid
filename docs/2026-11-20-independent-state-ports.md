@@ -31,7 +31,7 @@ rtk zsh -lc 'PLAYWRIGHT_BROWSERS_PATH="$PWD/.ms-playwright" node test/e2e.mjs'
 rtk zsh -lc 'PLAYWRIGHT_BROWSERS_PATH="$PWD/.ms-playwright" node test/webkit-mobile.mjs'
 ```
 
-- 单元/API214项通过，包括独立端口分配13项、最终SVG纯数据门禁20项及原有状态模型反例。
+- 单元/API215项通过，包括独立端口分配13项、最终SVG纯数据门禁21项及原有状态模型反例。
 - Chromium100张图库、454个三角、124标签、15既有变体、11新增状态变体通过；14项浏览器原生触摸输入检查通过。
 - WebKit手机视口100图、15既有变体及11新增状态变体通过；14项合成触点状态机不当作真机多指或原生滚动。
 - 新变体覆盖四方向、两种字体、两个带标签/无标签自环、七分支。原例另外检查700×1000画布预算、全部10箭头和38端点。
@@ -46,3 +46,9 @@ rtk zsh -lc 'PLAYWRIGHT_BROWSERS_PATH="$PWD/.ms-playwright" node test/webkit-mob
 特殊圆/菱形仍只使用合法轴向极点；端口容量无法满足时明确unsupported。跨层连接尚无门户模型，仍明确unsupported。搜索有界，未找到无交叉解不等于证明无解；最终报告保留真实状态。原例的紧凑预算不是任意规模图的固定画布上限。
 
 回滚独立库固定提交、主站配对引用和reader HTML/manifest，不清用户业务数据，不重启用户执行核心。
+
+## 主站净化后的验收
+
+主站删除data-points后，最终SVG检查器仍须直接读取实际d中的M/L/Q，验证正交直段及局部圆角。存在控制元数据时额外检查格式和端点，缺失时不能补回另一份原图形。新增反例确认损坏控制点与实际斜段仍拒绝。
+
+真实主站固定发布`8d520773cdf89ed8e6cda3b037e155f1e0af79b8`，记录位于`../my-ai-hub/output/playwright/mermaid-unified-layout-20261120050751-iIP0YE/`。桌面/手机、失败重试、13秒慢下载、离线阅读器和完整查看器手势回归通过；真实最终图约509×975、10独立箭头。后续检查器修订仅影响测试，不改变该固定发布字节。

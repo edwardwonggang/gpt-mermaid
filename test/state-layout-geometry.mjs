@@ -325,13 +325,38 @@ function readStateLayoutSvg(markup, evaluate) {
       edges.push(edge);
       const parts = (path.getAttribute("d") || "").trim().split(/(?=[Mm])/).filter(Boolean);
       edge.segments = parts.length;
+      // 主站净化会删除全部data-*控制点。真正画出的M/L/Q必须独立可验，
+      // 控制元数据仅作额外对照，不能把其缺失解释为线条缺失或补回原几何。
+      const commands = (path.getAttribute("d")||"").match(/[a-df-zA-DF-Z]|[-+]?(?:\d*\.\d+|\d+\.?\d*)(?:[eE][-+]?\d+)?/g)||[];
+      const drawingControls=[];let cursor=0,last=null;
+      const axial=(a,b)=>Math.abs(a.x-b.x)<=.1||Math.abs(a.y-b.y)<=.1;
+      while(cursor<commands.length){
+        const command=commands[cursor++],count=command==="Q"?4:command==="M"||command==="L"?2:0;
+        if(!count||cursor+count>commands.length){edge.controlIssues.push("unsupported-path-command");break;}
+        const values=commands.slice(cursor,cursor+count).map(Number);cursor+=count;
+        if(!values.every(Number.isFinite)){edge.controlIssues.push("invalid-path-command");break;}
+        const end=root(path,{x:values.at(-2),y:values.at(-1)});
+        if(command==="M") drawingControls.push(end);
+        else if(command==="L"){
+          if(!last||!axial(last,end))edge.controlIssues.push("diagonal-visible-line");
+          drawingControls.push(end);
+        }else{
+          const corner=root(path,{x:values[0],y:values[1]});
+          if(!last||!axial(last,corner)||!axial(corner,end)
+            ||Math.abs((corner.x-last.x)*(end.x-corner.x)+(corner.y-last.y)*(end.y-corner.y))>.1)
+            edge.controlIssues.push("nonorthogonal-rounded-corner");
+          drawingControls.push(corner,end);
+        }
+        last=end;
+      }
       let controls = [];
-      try {
+      if(path.dataset.points!==undefined) try {
         controls = JSON.parse(atob(path.dataset.points || "")).map(p => root(path, p));
         if (controls.length < 2 || controls.some(p => !Number.isFinite(p.x) || !Number.isFinite(p.y))) throw new Error();
         for (let i = 1; i < controls.length; i++) if (Math.abs(controls[i].x - controls[i - 1].x) > .1
           && Math.abs(controls[i].y - controls[i - 1].y) > .1) edge.controlIssues.push("diagonal-control");
       } catch { edge.controlIssues.push("missing-or-invalid-controls"); controls = []; }
+      else controls=drawingControls;
       if (parts.length !== 1) continue;
       const length = path.getTotalLength();
       if (!Number.isFinite(length) || length <= 0) { issues.push({ reason: "invalid-path", id: edge.id }); continue; }

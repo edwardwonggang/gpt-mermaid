@@ -226,7 +226,8 @@ test("声明数量只是对账，不以通过标记或缺失marker掩盖少边",
 
 // 最小 DOM/SVG 夹具仅提供解析后元素及原生几何接口；不实现布局算法。
 // 通过 vm 重新序列化整个回调，能捕获 page.evaluate 丢失模块闭包的错误。
-function browserFixture({ rectRx = 10, markerDepth = 10, lead = 40, noMarker = false, empty = false } = {}) {
+function browserFixture({ rectRx = 10, markerDepth = 10, lead = 40, noMarker = false, empty = false,
+  sanitized = false, malformedControls = false, diagonal = false } = {}) {
   const identity = { a: 1, b: 0, c: 0, d: 1, inverse() { return this; }, multiply() { return this; } };
   class DOMPoint {
     constructor(x, y) { this.x = x; this.y = y; }
@@ -265,6 +266,9 @@ function browserFixture({ rectRx = 10, markerDepth = 10, lead = 40, noMarker = f
   const path = { dataset: { id: "e", gptmEdgeOwner: "e", source: "A", target: "B",
     points: Buffer.from(JSON.stringify(route)).toString("base64") }, ...polyline(route),
     getScreenCTM: () => identity, getAttribute: name => attrs[name] || null };
+  if(sanitized)delete path.dataset.points;
+  if(malformedControls)path.dataset.points="not-json";
+  if(diagonal)attrs.d="M50 100L60 140L250 140L250 200";
   const svg = { dataset: {}, getScreenCTM: () => identity, getElementById: () => markerElement,
     querySelectorAll: selector => selector.includes("layout-object") ? nodes : empty ? [] : [path] };
   let removed = false;
@@ -298,4 +302,12 @@ test("SVG采样拒绝少箭头、实际短直段、空边集", () => {
     assert(report.issues.some(i => i.reason === reason), JSON.stringify(report.issues));
   }
   assert.throws(() => runBrowserCallback(inspectStatePorts, { empty: true }), /empty-edge-set/);
+});
+test("净化后仅依据最终d检查正交几何，缺元数据可验而坏元数据和斜段不能通过",()=>{
+  assert.deepEqual(runBrowserCallback(inspectStateLayout,{sanitized:true}).issues,[]);
+  for(const options of [{malformedControls:true},{sanitized:true,diagonal:true}]){
+    const report=runBrowserCallback(inspectStateLayout,options);
+    assert.equal(report.accepted,false);
+    assert(report.issues.some(i=>i.reason==="control-contract"));
+  }
 });
