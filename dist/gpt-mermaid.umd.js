@@ -1227,6 +1227,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       for (const group of groups.values()) {
         if (group.length < 2 || horizontalSide(group[0].side)) continue;
         const node = group[0].node;
+        if (group.every((port) => !port.start && signOf(port.side) * (port.edge.source.box.y + port.edge.source.box.height / 2 - node.box.y - node.box.height / 2) > 0)) continue;
         for (const port of group) {
           const other = port.start ? port.edge.target : port.edge.source;
           const otherCenterX = other.box.x + other.box.width / 2;

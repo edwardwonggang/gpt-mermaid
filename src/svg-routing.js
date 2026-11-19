@@ -539,6 +539,10 @@ export function routeNativeEdges(svg, options = {}) {
     for (const group of groups.values()) {
       if (group.length < 2 || horizontalSide(group[0].side)) continue;
       const node = group[0].node;
+      // 原生布局已给同侧纯入边分配了有序端口；来源就在这一侧时保持该顺序。
+      // 仅凭横向偏移把它们全部搬到侧面，会让正常的上方汇入也变成绕侧入框。
+      if (group.every(port => !port.start && signOf(port.side)
+        * (port.edge.source.box.y + port.edge.source.box.height / 2 - node.box.y - node.box.height / 2) > 0)) continue;
       for (const port of group) {
         const other = port.start ? port.edge.target : port.edge.source;
         const otherCenterX = other.box.x + other.box.width / 2;

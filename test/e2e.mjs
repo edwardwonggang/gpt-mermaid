@@ -166,6 +166,7 @@ DONE --> DISABLED: 使能置 0`;
         id: edge.dataset.id, source: edge.dataset.source, target: edge.dataset.target, label,
         sourceGap: stateDistance(stateNodes.get(edge.dataset.source), start),
         targetGap: stateDistance(stateNodes.get(edge.dataset.target), end),
+        targetTopGap: Math.abs(end.y - stateNodes.get(edge.dataset.target).top),
         rerouted: edge.hasAttribute("data-gptm-native-rerouted"),
         bends: Math.max(0, points.length - 2), minLeg: legs.length ? Math.min(...legs) : 0,
         orthogonal: points.slice(1).every((point, index) =>
@@ -176,6 +177,8 @@ DONE --> DISABLED: 使能置 0`;
       nativeRoutes: Number(stateHost.querySelector("svg")?.getAttribute("data-gptm-native-routes")),
       crossingsBefore: Number(stateHost.querySelector("svg")?.getAttribute("data-gptm-crossings-before")),
       crossingRoutes: Number(stateHost.querySelector("svg")?.getAttribute("data-gptm-crossing-routes")),
+      crossings: Number(stateHost.querySelector("svg")?.getAttribute("data-gptm-crossings")),
+      status: stateHost.querySelector("svg")?.getAttribute("data-gptm-routing-status"),
       edges: stateEdgeState,
     };
     stateHost.remove();
@@ -258,6 +261,11 @@ DONE --> DISABLED: 使能置 0`;
   assert.equal(programmatic.stateGeometry.borderWidth, "1.5px");
   assert.equal(programmatic.stateRouting.edges.length, 10, JSON.stringify(programmatic.stateRouting));
   assert.equal(programmatic.stateRouting.nativeRoutes, 10, JSON.stringify(programmatic.stateRouting));
+  assert.equal(programmatic.stateRouting.status, "clear", JSON.stringify(programmatic.stateRouting));
+  assert.equal(programmatic.stateRouting.crossings, 0, JSON.stringify(programmatic.stateRouting));
+  const enabledEdge = programmatic.stateRouting.edges.find(edge =>
+    edge.source === "DISABLED" && edge.target === "WAIT_CONDITION");
+  assert(enabledEdge?.targetTopGap < 2, `使能置1必须从上边进入等待状态：${JSON.stringify(enabledEdge)}`);
   for (const edge of programmatic.stateRouting.edges) {
     assert(edge.rerouted, `state transition 必须采用干净轴线路由：${JSON.stringify(edge)}`);
     assert(edge.orthogonal, `state transition 混入斜线：${JSON.stringify(edge)}`);
