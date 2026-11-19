@@ -680,6 +680,7 @@ var EPS2 = 0.05;
 var PORT_GAP = 18;
 var CLEARANCE = 10;
 var BEND_COST = 22;
+var SHORT_LEG = 8;
 var near = (a, b) => Math.abs(a - b) < EPS2;
 var distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 function nodeShape(node) {
@@ -736,7 +737,8 @@ function routeQuality(input) {
   const cross2 = (a, b) => a.x * b.y - a.y * b.x;
   for (let i = 1; i < points.length; i++) {
     const a = points[i - 1], b = points[i], v = { x: b.x - a.x, y: b.y - a.y };
-    length += distance(a, b);
+    const leg = distance(a, b);
+    length += leg;
     for (let j = i + 1; j < points.length; j++) {
       const c = points[j - 1], d = points[j], w = { x: d.x - c.x, y: d.y - c.y };
       const offset = { x: c.x - a.x, y: c.y - a.y }, determinant = cross2(v, w);
@@ -1124,7 +1126,7 @@ function labelOnRoute(svg, points, size, barriers, occupied, original) {
   }
   return candidates.sort((a, b) => a.score - b.score)[0];
 }
-function routeNativeEdges(svg) {
+function routeNativeEdges(svg, options = {}) {
   const nodes = new Map([...svg.querySelectorAll("g.node[data-id]")].map((element) => {
     const shape = nodeShape(element);
     return [element.dataset.id, shape && { element, shape, box: boundsInSvg(svg, shape) }];
@@ -1139,7 +1141,14 @@ function routeNativeEdges(svg) {
       const value = element.getAttribute(attribute);
       return !value || /(?:barbEnd|extension(?:Start|End)|dependency(?:Start|End))\)/.test(value);
     });
-    return { element, source, target, points: raw.map((p) => inSvg(svg, element, p)), compatible };
+    return {
+      element,
+      source,
+      target,
+      compatible,
+      state: element.classList?.contains("transition") === true,
+      points: raw.map((p) => inSvg(svg, element, p))
+    };
   }).filter(Boolean);
   const loopLabels = new Map([...svg.querySelectorAll("g.edgeLabel")].map((label) => [
     label.querySelector("[data-id]")?.dataset.id || label.dataset.id,
@@ -1214,6 +1223,90 @@ function routeNativeEdges(svg) {
       changed.add(port.edge);
     });
   }
+  if (svg.classList?.contains("statediagram")) {
+    for (const group of groups.values()) {
+      if (group.length < 2 || horizontalSide(group[0].side)) continue;
+      const node = group[0].node;
+      for (const port of group) {
+        const other = port.start ? port.edge.target : port.edge.source;
+        const otherCenterX = other.box.x + other.box.width / 2;
+        if (otherCenterX >= node.box.x - 4 && otherCenterX <= node.box.right + 4) continue;
+        const side = otherCenterX < node.box.x ? "left" : "right";
+        port.side = side;
+        port.anchor = onSide(node.box, side, node.box.y + node.box.height / 2);
+        port.value = port.anchor.y;
+      }
+    }
+    const sides = /* @__PURE__ */ new Map();
+    for (const port of ports.values()) {
+      if (!port.edge.compatible) continue;
+      const key = `${port.node.element.id}\0${port.side}`;
+      if (!sides.has(key)) sides.set(key, []);
+      sides.get(key).push(port);
+    }
+    for (const group of sides.values()) {
+      if (group.length < 2) continue;
+      group.sort((a, b) => a.value - b.value);
+      if (!group.some((port, index) => index && port.value - group[index - 1].value < PORT_GAP)) continue;
+      const node = group[0].node, horizontal = horizontalSide(group[0].side);
+      const low = horizontal ? node.box.y : node.box.x;
+      const span = horizontal ? node.box.height : node.box.width;
+      const margin = Math.min(12, span * 0.2);
+      const spacing = Math.min(24, (span - margin * 2) / (group.length - 1));
+      group.forEach((port, index) => {
+        const value = low + span / 2 + (index - (group.length - 1) / 2) * spacing;
+        port.anchor = onSide(node.box, port.side, value);
+        port.value = value;
+      });
+    }
+  }
+  for (const node of svg.classList?.contains("statediagram") ? nodes.values() : []) {
+    if (node.box.width > 24 || node.box.height > 24) continue;
+    const radial = [...ports.values()].filter((port) => port.node === node && port.edge.compatible);
+    if (radial.length < 2) continue;
+    const center = { x: node.box.x + node.box.width / 2, y: node.box.y + node.box.height / 2 };
+    const radiusX = node.box.width / 2, radiusY = node.box.height / 2;
+    radial.sort((a, b) => Math.atan2(a.anchor.y - center.y, a.anchor.x - center.x) - Math.atan2(b.anchor.y - center.y, b.anchor.x - center.x));
+    const usedSides = /* @__PURE__ */ new Set();
+    const sideVector = { top: [0, -1], right: [1, 0], bottom: [0, 1], left: [-1, 0] };
+    const centers = new Map(radial.map((port) => {
+      const other = port.start ? port.edge.target : port.edge.source;
+      return [port, {
+        x: other.box.x + other.box.width / 2 - center.x,
+        y: other.box.y + other.box.height / 2 - center.y
+      }];
+    }));
+    const oneSided = radial.length === 3 && [...centers.values()].every((delta2) => delta2.y < 0) ? ["left", "top", "right"] : radial.length === 3 && [...centers.values()].every((delta2) => delta2.y > 0) ? ["left", "bottom", "right"] : null;
+    const ordered = oneSided ? radial.slice().sort((a, b) => centers.get(a).x - centers.get(b).x) : radial;
+    ordered.forEach((port, index) => {
+      let side, x, y;
+      if (oneSided) {
+        side = oneSided[index];
+        ({ x, y } = onSide(node.box, side, horizontalSide(side) ? center.y : center.x));
+      } else if (radial.length <= 4) {
+        const { x: dx, y: dy } = centers.get(port);
+        const desired = Math.abs(dx) > Math.abs(dy) ? dx > 0 ? "right" : "left" : dy > 0 ? "bottom" : "top";
+        const available = ["top", "right", "bottom", "left"].filter((candidate) => !usedSides.has(candidate));
+        side = available.includes(desired) ? desired : available.sort((left, right) => {
+          const score = (candidate) => {
+            const [vx, vy] = sideVector[candidate];
+            return -((dx * vx + dy * vy) / Math.max(1, Math.hypot(dx, dy)));
+          };
+          return score(left) - score(right);
+        })[0];
+        usedSides.add(side);
+        ({ x, y } = onSide(node.box, side, horizontalSide(side) ? center.y : center.x));
+      } else {
+        const angle = -Math.PI / 2 + index * Math.PI * 2 / radial.length;
+        x = center.x + Math.cos(angle) * radiusX;
+        y = center.y + Math.sin(angle) * radiusY;
+        side = Math.abs(Math.cos(angle)) > Math.abs(Math.sin(angle)) ? Math.cos(angle) > 0 ? "right" : "left" : Math.sin(angle) > 0 ? "bottom" : "top";
+      }
+      port.anchor = { x, y };
+      port.side = side;
+      port.value = horizontalSide(port.side) ? y : x;
+    });
+  }
   const boxes = [...nodes.values()].map((node) => node.box), occupied = [];
   for (const edge of edges.filter((edge2) => !edge2.compatible || edge2.source === edge2.target)) {
     for (let i = 1; i < edge.points.length; i++) occupied.push([edge.points[i - 1], edge.points[i]]);
@@ -1254,24 +1347,283 @@ function routeNativeEdges(svg) {
     const label = labelById.get(edge.element.dataset.id);
     return [edge, label?.textContent.trim() ? boundsInSvg(svg, label) : null];
   }));
-  const routingOrder = edges.filter((edge) => edge.compatible).sort((a, b) => (labelSizes.get(b)?.width || 0) - (labelSizes.get(a)?.width || 0));
+  const reversePairs = /* @__PURE__ */ new Map();
+  for (const edge of edges) {
+    if (!edge.state || !edge.compatible || edge.source === edge.target) continue;
+    const key = [edge.source.element.id, edge.target.element.id].sort().join("\0");
+    const pair = reversePairs.get(key) || [];
+    pair.push(edge);
+    reversePairs.set(key, pair);
+  }
+  for (const pair of reversePairs.values()) {
+    if (pair.length !== 2 || pair[0].source !== pair[1].target || pair[0].target !== pair[1].source) continue;
+    const [first, second] = pair;
+    const adjust = (leftPort, rightPort) => {
+      if (!leftPort || !rightPort || leftPort.side !== rightPort.side) return;
+      const box = leftPort.node.box, horizontal = horizontalSide(leftPort.side);
+      const cross2 = horizontal ? box.y : box.x;
+      const span = horizontal ? box.height : box.width;
+      const low = cross2 + 2, high = cross2 + span - 2;
+      const firstWidth = labelSizes.get(first)?.width || labelSizes.get(first)?.height || 0;
+      const secondWidth = labelSizes.get(second)?.width || labelSizes.get(second)?.height || 0;
+      const gap = Math.min(high - low, Math.max(PORT_GAP, (firstWidth + secondWidth) / 2 + 10));
+      const center = cross2 + span / 2;
+      leftPort.anchor[horizontal ? "y" : "x"] = Math.max(low, Math.min(high, center - gap / 2));
+      rightPort.anchor[horizontal ? "y" : "x"] = Math.max(low, Math.min(high, center + gap / 2));
+      leftPort.value = leftPort.anchor[horizontal ? "y" : "x"];
+      rightPort.value = rightPort.anchor[horizontal ? "y" : "x"];
+    };
+    adjust(ports.get(`${first.element.id}:true`), ports.get(`${second.element.id}:false`));
+    adjust(ports.get(`${first.element.id}:false`), ports.get(`${second.element.id}:true`));
+  }
+  const routingOrder = edges.filter((edge) => edge.compatible).sort((a, b) => {
+    if (a.state !== b.state) return a.state ? -1 : 1;
+    if (a.state) {
+      if (options.retry) {
+        const failedA = options.failed?.has(a.element.id) ? 1 : 0;
+        const failedB = options.failed?.has(b.element.id) ? 1 : 0;
+        if (failedA !== failedB) return failedA - failedB;
+      }
+      const tinyRank = (edge) => {
+        const port = ports.get(`${edge.element.id}:false`);
+        return edge.target.box.width <= 24 && edge.target.box.height <= 24 && port && horizontalSide(port.side) ? 0 : 1;
+      };
+      if (tinyRank(a) !== tinyRank(b)) return tinyRank(a) - tinyRank(b);
+      if (a.source.element.id === b.target.element.id) return -1;
+      if (b.source.element.id === a.target.element.id) return 1;
+      if (options.retry) {
+        const sourceY = (edge) => ports.get(`${edge.element.id}:true`)?.anchor.y || 0;
+        return sourceY(b) - sourceY(a);
+      }
+      return 0;
+    }
+    return (labelSizes.get(b)?.width || 0) - (labelSizes.get(a)?.width || 0);
+  });
   for (const edge of routingOrder) {
     if (edge.source === edge.target) continue;
+    const foreign = [...nodes.values()].filter((node) => node !== edge.source && node !== edge.target).map((node) => node.box);
     const a = ports.get(`${edge.element.id}:true`), b = ports.get(`${edge.element.id}:false`);
+    const retrying = edge.state && options.retry && options.failed?.has(edge.element.id);
+    if (retrying) {
+      const opposite = { left: "right", right: "left", top: "bottom", bottom: "top" }[b.side];
+      b.side = opposite;
+      b.anchor = onSide(
+        b.node.box,
+        opposite,
+        horizontalSide(opposite) ? b.node.box.y + b.node.box.height / 2 : b.node.box.x + b.node.box.width / 2
+      );
+      b.value = horizontalSide(opposite) ? b.anchor.y : b.anchor.x;
+    }
+    let directAxis = "";
+    if (edge.state) {
+      const dx = Math.abs(a.anchor.x - b.anchor.x), dy = Math.abs(a.anchor.y - b.anchor.y);
+      const axis = dx < SHORT_LEG * 1.5 && dy > dx * 2 ? "x" : dy < SHORT_LEG * 1.5 && dx > dy * 2 ? "y" : "";
+      directAxis = axis;
+      if (axis) {
+        const low = Math.max(a.node.box[axis] + 2, b.node.box[axis] + 2);
+        const high = Math.min(
+          a.node.box[axis === "x" ? "right" : "bottom"] - 2,
+          b.node.box[axis === "x" ? "right" : "bottom"] - 2
+        );
+        if (low <= high) {
+          const common = Math.max(low, Math.min(high, (a.anchor[axis] + b.anchor[axis]) / 2));
+          a.anchor[axis] = common;
+          b.anchor[axis] = common;
+        }
+      }
+    }
     const lead = (port) => {
       const point = { ...port.anchor }, axis = horizontalSide(port.side) ? "x" : "y";
       point[axis] += signOf(port.side) * 24;
       return point;
     };
     const start = lead(a), end = lead(b);
+    const vector2 = (a2, b2) => ({ x: b2.x - a2.x, y: b2.y - a2.y });
+    const directions = { start: vector2(a.anchor, start), end: vector2(end, b.anchor) };
+    if (edge.state) {
+      const size2 = labelSizes.get(edge);
+      const barriers2 = [...retrying ? boxes : foreign, ...reservedLabels];
+      const labelBarriers2 = [...boxes, ...reservedLabels];
+      const candidates = [];
+      const considerStateRoute = (route) => {
+        const raw = route && [a.anchor, ...route, b.anchor];
+        if (!raw) return;
+        const snapped = raw.map((point) => {
+          const x = Math.abs(point.x - a.anchor.x) < SHORT_LEG ? a.anchor.x : Math.abs(point.x - b.anchor.x) < SHORT_LEG ? b.anchor.x : point.x;
+          const y = Math.abs(point.y - a.anchor.y) < SHORT_LEG ? a.anchor.y : Math.abs(point.y - b.anchor.y) < SHORT_LEG ? b.anchor.y : point.y;
+          return { x, y };
+        });
+        for (const points2 of [simplifyPoints(snapped), simplifyPoints(raw)]) {
+          const quality = routeQuality(points2);
+          const crossesEndpoint = (node, skip) => points2.slice(1).some((point, index) => index !== skip && segmentBlocked(points2[index], point, [node.box], -1));
+          const outsidePort = (anchor, point, side) => {
+            if (horizontalSide(side)) return side === "right" ? point.x > anchor.x + EPS2 : point.x < anchor.x - EPS2;
+            return side === "bottom" ? point.y > anchor.y + EPS2 : point.y < anchor.y - EPS2;
+          };
+          if (points2.length > 10 || !Number.isFinite(quality.score) || !clearRoute(points2, foreign)) continue;
+          if (!points2.slice(1).every((point, index) => near(point.x, points2[index].x) || near(point.y, points2[index].y))) continue;
+          if (!outsidePort(a.anchor, points2[1], a.side) || !outsidePort(b.anchor, points2.at(-2), b.side)) continue;
+          if (crossesEndpoint(edge.source, 0) || crossesEndpoint(edge.target, points2.length - 2)) continue;
+          if (points2.slice(1).some((point, index) => distance(points2[index], point) < SHORT_LEG)) continue;
+          const committedHits = points2.slice(1).flatMap((point, index) => occupied.map(([from, to]) => {
+            const hit = segmentIntersection(points2[index], point, from, to);
+            return hit && hit.kind !== "touch" ? hit : null;
+          }).filter(Boolean));
+          const tinyTarget = edge.target.box.width <= 24 && edge.target.box.height <= 24;
+          const nearTinyPort = tinyTarget && committedHits.every((hit) => distance(hit, b.anchor) <= 28);
+          if (committedHits.length && !nearTinyPort) continue;
+          const reservation2 = size2 && labelOnRoute(svg, points2, size2, labelBarriers2, occupied);
+          const reservationPenalty = size2 && !reservation2 ? 1e6 : 0;
+          candidates.push({ points: points2, reservation: reservation2, score: quality.score + (reservation2?.score || 0) * 0.02 + reservationPenalty });
+          break;
+        }
+      };
+      if (size2) {
+        const center = { x: size2.x + size2.width / 2, y: size2.y + size2.height / 2 };
+        for (const horizontal of [true, false]) {
+          const enter = horizontal ? { x: center.x - 8, y: center.y } : { x: center.x, y: center.y - 8 };
+          const exit = horizontal ? { x: center.x + 8, y: center.y } : { x: center.x, y: center.y + 8 };
+          const through = vector2(enter, exit);
+          const before = orthogonalRoute(
+            start,
+            enter,
+            barriers2,
+            CLEARANCE,
+            occupied,
+            { ...directions, end: through, avoidSegments: occupied }
+          );
+          const after = orthogonalRoute(
+            exit,
+            end,
+            barriers2,
+            CLEARANCE,
+            occupied,
+            { start: through, end: directions.end, avoidSegments: occupied }
+          );
+          if (before && after) considerStateRoute([...before, ...after]);
+        }
+      }
+      considerStateRoute(orthogonalRoute(
+        start,
+        end,
+        barriers2,
+        CLEARANCE,
+        occupied,
+        { ...directions, avoidSegments: occupied }
+      ));
+      if (size2 && !candidates.some((candidate) => candidate.reservation)) {
+        const gapX = Math.max(30, size2.width / 2 + 12), gapY = Math.max(30, size2.height / 2 + 12);
+        const extra = {
+          ...directions,
+          avoidSegments: occupied,
+          extraX: [a.anchor.x - gapX, a.anchor.x + gapX, b.anchor.x - gapX, b.anchor.x + gapX],
+          extraY: [a.anchor.y - gapY, a.anchor.y + gapY, b.anchor.y - gapY, b.anchor.y + gapY]
+        };
+        considerStateRoute(orthogonalRoute(start, end, barriers2, CLEARANCE, occupied, extra));
+        if (!candidates.some((candidate) => candidate.reservation)) {
+          considerStateRoute(orthogonalRoute(
+            start,
+            end,
+            barriers2,
+            CLEARANCE,
+            occupied,
+            { ...extra, avoidSegments: void 0 }
+          ));
+        }
+      }
+      if (!candidates.some((candidate) => candidate.reservation)) {
+        const around = (low, high) => {
+          const span = high - low;
+          return [low + span / 2, low + span / 3, low + span * 2 / 3, low - 30, high + 30];
+        };
+        if (!horizontalSide(a.side) && !horizontalSide(b.side)) {
+          for (const y of around(Math.min(a.anchor.y, b.anchor.y), Math.max(a.anchor.y, b.anchor.y))) {
+            considerStateRoute([{ x: a.anchor.x, y }, { x: b.anchor.x, y }]);
+          }
+        } else if (horizontalSide(a.side) && horizontalSide(b.side)) {
+          for (const x of around(Math.min(a.anchor.x, b.anchor.x), Math.max(a.anchor.x, b.anchor.x))) {
+            considerStateRoute([{ x, y: a.anchor.y }, { x, y: b.anchor.y }]);
+          }
+        } else {
+          for (const y of around(Math.min(a.anchor.y, b.anchor.y), Math.max(a.anchor.y, b.anchor.y))) {
+            considerStateRoute([{ x: a.anchor.x, y }, { x: b.anchor.x, y }]);
+          }
+          for (const x of around(Math.min(a.anchor.x, b.anchor.x), Math.max(a.anchor.x, b.anchor.x))) {
+            considerStateRoute([{ x, y: a.anchor.y }, { x, y: b.anchor.y }]);
+          }
+          considerStateRoute([{ x: b.anchor.x, y: a.anchor.y }]);
+          considerStateRoute([{ x: a.anchor.x, y: b.anchor.y }]);
+        }
+      }
+      if (!candidates.length) {
+        const controls = simplifyPoints([start, ...edge.points.slice(1, -1), end]);
+        for (const horizontalFirst of [true, false]) {
+          const orthogonalized = [];
+          for (let i = 1; i < controls.length; i++) {
+            const from = controls[i - 1], to = controls[i];
+            if (near(from.x, to.x) || near(from.y, to.y)) {
+              orthogonalized.push(to);
+              continue;
+            }
+            const corner = horizontalFirst ? { x: to.x, y: from.y } : { x: from.x, y: to.y };
+            orthogonalized.push(corner, to);
+          }
+          considerStateRoute(orthogonalized.slice(1, -1));
+        }
+      }
+      if (!candidates.length) {
+        const lane = 24;
+        const extraX = [a.anchor.x - lane, a.anchor.x + lane, b.anchor.x - lane, b.anchor.x + lane];
+        const extraY = [a.anchor.y - lane, a.anchor.y + lane, b.anchor.y - lane, b.anchor.y + lane];
+        for (const box of foreign) {
+          extraX.push(box.x - lane, box.right + lane);
+          extraY.push(box.y - lane, box.bottom + lane);
+        }
+        for (const point of occupied.flatMap((segment) => segment)) {
+          extraX.push(point.x - lane, point.x + lane);
+          extraY.push(point.y - lane, point.y + lane);
+        }
+        considerStateRoute(orthogonalRoute(
+          start,
+          end,
+          barriers2,
+          CLEARANCE,
+          occupied,
+          { ...directions, avoidSegments: occupied, extraX, extraY }
+        ));
+      }
+      candidates.sort((left, right) => left.score - right.score);
+      const bestState = candidates[0];
+      if (bestState) {
+        writePoints(svg, edge.element, bestState.points);
+        edge.element.setAttribute("data-gptm-native-rerouted", "true");
+        if (bestState.reservation) {
+          reservedLabels.push(bestState.reservation.box);
+          edge.element.setAttribute("data-gptm-label-x", String(bestState.reservation.x));
+          edge.element.setAttribute("data-gptm-label-y", String(bestState.reservation.y));
+        }
+      } else if (directAxis) {
+        const points2 = simplifyPoints([a.anchor, b.anchor]);
+        const crossesCommitted = points2.slice(1).some((point, index) => occupied.some(([from, to]) => {
+          const hit = segmentIntersection(points2[index], point, from, to);
+          return hit && hit.kind !== "touch";
+        }));
+        const outsidePort = (anchor, point, side) => horizontalSide(side) ? side === "right" ? point.x > anchor.x + EPS2 : point.x < anchor.x - EPS2 : side === "bottom" ? point.y > anchor.y + EPS2 : point.y < anchor.y - EPS2;
+        if (!crossesCommitted && outsidePort(a.anchor, points2[1], a.side) && outsidePort(b.anchor, points2.at(-2), b.side) && clearRoute(points2, foreign)) {
+          writePoints(svg, edge.element, points2);
+          edge.element.setAttribute("data-gptm-native-rerouted", "true");
+        }
+      }
+      const chosen = bestState ? readPoints(edge.element) : null;
+      const retained = chosen?.map((p) => inSvg(svg, edge.element, p)) || edge.points;
+      for (let i = 1; i < retained.length; i++) occupied.push([retained[i - 1], retained[i]]);
+      continue;
+    }
     const foreignShields = shields.filter((shield) => shield.edge !== edge);
     const barriers = [...boxes, ...foreignShields, ...reservedLabels];
     const labelBarriers = [...boxes, ...shields, ...approaches.filter((item) => item.edge !== edge), ...reservedLabels];
-    const foreign = [...nodes.values()].filter((node) => node !== edge.source && node !== edge.target).map((node) => node.box);
     const completeBarriers = [...foreign, ...foreignShields, ...reservedLabels];
     const size = labelSizes.get(edge);
-    const vector2 = (a2, b2) => ({ x: b2.x - a2.x, y: b2.y - a2.y });
-    const directions = { start: vector2(a.anchor, start), end: vector2(end, b.anchor) };
     let best;
     const consider = (points2, original = false) => {
       const quality = routeQuality(points2);
@@ -1321,6 +1673,10 @@ function routeNativeEdges(svg) {
     }
   }
   svg.setAttribute("data-gptm-native-routes", String(edges.filter((e) => e.element.hasAttribute("data-gptm-native-rerouted")).length));
+  const failedStateEdges = edges.filter((edge) => edge.state && edge.compatible && edge.source !== edge.target && !edge.element.hasAttribute("data-gptm-native-rerouted"));
+  if (!options.retry && failedStateEdges.length) {
+    return routeNativeEdges(svg, { retry: true, failed: new Set(failedStateEdges.map((edge) => edge.element.id)) });
+  }
 }
 
 // src/svg-labels.js
@@ -1539,6 +1895,7 @@ function arrowRegions(svg, edges) {
   return regions;
 }
 function placeEdgeLabels(svg) {
+  const stateDiagram = Boolean(svg.querySelector("path.transition"));
   const paths = new Map([...svg.querySelectorAll("[data-id]")].filter((p) => p instanceof SVGGeometryElement).map((p) => [p.dataset.id, p]));
   const nodes = [...svg.querySelectorAll("g.node > .label-container, g.node > .outer-path")].map((n) => boundsInSvg(svg, n));
   const lines = [...paths.values()].map((edge) => {
@@ -1557,12 +1914,13 @@ function placeEdgeLabels(svg) {
     return edge.getTotalLength() - Math.max(box.width, box.height);
   };
   const space = new Map(labels.map((label) => [label, available(label)]));
-  labels.sort((a, b) => space.get(a) - space.get(b));
+  const labelBoxes = new Map(labels.map((label) => [label, boundsInSvg(svg, label)]));
+  labels.sort((a, b) => stateDiagram ? labelBoxes.get(b).width - labelBoxes.get(a).width || space.get(a) - space.get(b) : space.get(a) - space.get(b));
   for (const label of labels) {
     const id = label.querySelector("[data-id]")?.dataset.id || label.dataset.id;
     const edge = paths.get(id);
     if (!edge) continue;
-    const box = boundsInSvg(svg, label), old = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    const box = labelBoxes.get(label), old = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
     if (box.width === 0 || box.height === 0) continue;
     if (edge.hasAttribute("data-gptm-label-x") && edge.hasAttribute("data-gptm-label-y")) {
       const target2 = { x: Number(edge.getAttribute("data-gptm-label-x")), y: Number(edge.getAttribute("data-gptm-label-y")) };
@@ -1571,7 +1929,7 @@ function placeEdgeLabels(svg) {
         const before2 = fromSvg(svg, label.parentElement, old), after2 = fromSvg(svg, label.parentElement, target2);
         shift(label, after2.x - before2.x, after2.y - before2.y);
         label.setAttribute("data-gptm-label-edge", edge.id);
-        occupied.push(proposed);
+        occupied.push({ ...proposed, label: true });
         continue;
       }
       edge.removeAttribute("data-gptm-label-x");
@@ -1590,9 +1948,9 @@ function placeEdgeLabels(svg) {
       const a = inSvg(svg, edge, edge.getPointAtLength(Math.max(0, offset - 4)));
       const b = inSvg(svg, edge, edge.getPointAtLength(Math.min(length, offset + 4)));
       const diagonal = Math.min(Math.abs(b.x - a.x), Math.abs(b.y - a.y));
-      const collision = [...nodes, ...occupied].filter((n) => overlaps(proposed, n)).length;
+      const collision = nodes.filter((n) => overlaps(proposed, n)).length + occupied.filter((n) => overlaps(proposed, n, stateDiagram ? 1 : 5)).length;
       const arrowCollision = arrows.filter((n) => overlaps(proposed, n, 2)).length;
-      const foreign = lines.filter((line) => line.edge !== edge && line.points.some((p) => p.x > proposed.x - 2 && p.x < proposed.right + 2 && p.y > proposed.y - 2 && p.y < proposed.bottom + 2)).length;
+      const foreign = lines.filter((line) => line.edge !== edge && line.points.some((p) => stateDiagram ? p.x > proposed.x + 0.5 && p.x < proposed.right - 0.5 && p.y > proposed.y + 0.5 && p.y < proposed.bottom - 0.5 : p.x > proposed.x - 2 && p.x < proposed.right + 2 && p.y > proposed.y - 2 && p.y < proposed.bottom + 2)).length;
       const nearEnd = Math.min(offset, length - offset) < Math.max(box.width, box.height) / 2 + 16;
       candidates.push({ point, proposed, score: collision * 1e6 + arrowCollision * 1e6 + foreign * 1e5 + (nearEnd ? 1e4 : 0) + diagonal * 20 + Math.hypot(point.x - old.x, point.y - old.y) });
     };
@@ -1624,7 +1982,45 @@ function placeEdgeLabels(svg) {
     const before = fromSvg(svg, label.parentElement, old), after = fromSvg(svg, label.parentElement, target.point);
     shift(label, after.x - before.x, after.y - before.y);
     label.setAttribute("data-gptm-label-edge", edge.id);
-    occupied.push(target.proposed);
+    occupied.push({ ...target.proposed, label: true });
+  }
+  const placed = (stateDiagram ? labels : []).map((label) => {
+    const id = label.querySelector("[data-id]")?.dataset.id || label.dataset.id;
+    return { label, edge: paths.get(id), box: boundsInSvg(svg, label) };
+  }).filter((item) => item.edge && item.label.textContent.trim());
+  const boxConflict = (a, b) => a.x < b.right + 1 && a.right > b.x - 1 && a.y < b.bottom + 1 && a.bottom > b.y - 1;
+  for (let pass = 0; pass < 2; pass++) {
+    let changed = false;
+    for (const item of placed) {
+      const conflicts = placed.filter((other) => other !== item && boxConflict(item.box, other.box)).length;
+      if (!conflicts) continue;
+      const length = item.edge.getTotalLength(), steps = Math.min(1200, Math.max(20, Math.ceil(length / 4)));
+      const old = { x: (item.box.x + item.box.right) / 2, y: (item.box.y + item.box.bottom) / 2 };
+      let best = null;
+      for (let index = 1; index < steps; index++) {
+        const point = inSvg(svg, item.edge, item.edge.getPointAtLength(length * index / steps));
+        const proposed = {
+          x: point.x - item.box.width / 2,
+          y: point.y - item.box.height / 2,
+          right: point.x + item.box.width / 2,
+          bottom: point.y + item.box.height / 2
+        };
+        if (nodes.some((box) => overlaps(proposed, box)) || arrows.some((box) => overlaps(proposed, box, 2))) continue;
+        const nextConflicts = placed.filter((other) => other !== item && boxConflict(proposed, other.box)).length;
+        if (nextConflicts >= conflicts) continue;
+        const foreign = lines.filter((line) => line.edge !== item.edge && line.points.some((p) => p.x > proposed.x + 0.5 && p.x < proposed.right - 0.5 && p.y > proposed.y + 0.5 && p.y < proposed.bottom - 0.5)).length;
+        const score = nextConflicts * 1e6 + foreign * 1e5 + Math.hypot(point.x - old.x, point.y - old.y);
+        if (!best || score < best.score) best = { point, proposed, score };
+      }
+      if (!best) continue;
+      const before = fromSvg(svg, item.label.parentElement, old);
+      const after = fromSvg(svg, item.label.parentElement, best.point);
+      shift(item.label, after.x - before.x, after.y - before.y);
+      item.box = best.proposed;
+      item.label.setAttribute("data-gptm-label-edge", item.edge.id);
+      changed = true;
+    }
+    if (!changed) break;
   }
 }
 function sequenceAnchor(svg, actorId, y, referenceX, towardsX) {
@@ -3722,6 +4118,14 @@ function isFlowchart(source) {
   }
   return false;
 }
+function isStateDiagram(source) {
+  for (const line of bodyAfterFrontmatter(String(source || "").split(/\r?\n/))) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("%%")) continue;
+    return /^stateDiagram(?:-v2)?\b/.test(trimmed);
+  }
+  return false;
+}
 function ensureCssClass(node, name) {
   const current = node.getAttribute("class") || "";
   if (!current.split(/\s+/).includes(name)) node.setAttribute("class", `${current} ${name}`.trim());
@@ -4163,6 +4567,11 @@ function postProcessSvg(svgMarkup, variables, graph, config = {}) {
     repairSequenceConnections(live);
     placeEdgeLabels(live);
     resolveEdgeCrossings(live, repairEdgeConnections);
+    if (live.classList?.contains("statediagram")) {
+      routeNativeEdges(live);
+      repairEdgeConnections(live);
+      placeEdgeLabels(live);
+    }
     if (graph || Number(live.getAttribute("data-gptm-native-routes")) > 0 || live.hasAttribute("data-gptm-planar-layout") || Number(live.getAttribute("data-gptm-spacing-factor")) > 1) fitSvgBounds(live);
     colorDirectionalEdges(live, variables);
     const shafts = trimArrowShafts(live);
@@ -4228,9 +4637,15 @@ function createRenderer(baseUrl2 = document.baseURI) {
       timeoutMessage: "gpt-mermaid: runtime load timed out"
     });
   }
-  function initialize(mermaid, config, flowchart) {
+  function initialize(mermaid, config, flowchart, stateDiagram) {
     const layout = flowchart ? "elk" : "dagre";
-    const nextKey = JSON.stringify({ preset: config.preset, themeVariables: config.themeVariables, isDark: config.isDark, layout });
+    const nextKey = JSON.stringify({
+      preset: config.preset,
+      themeVariables: config.themeVariables,
+      isDark: config.isDark,
+      layout,
+      state: stateDiagram ? "wide" : "default"
+    });
     if (initialized && configKey === nextKey) return;
     mermaid.initialize({
       startOnLoad: false,
@@ -4257,7 +4672,7 @@ function createRenderer(baseUrl2 = document.baseURI) {
       class: { useMaxWidth: false },
       // 状态图默认 wrappingWidth 约 120，会把 WAIT_CONDITION 这类状态名
       // 强行拆行；放宽到 360 后由节点宽度自然决定是否换行。
-      state: { useMaxWidth: false, wrappingWidth: 360 },
+      state: stateDiagram ? { useMaxWidth: false, wrappingWidth: 360, nodeSpacing: 140, rankSpacing: 90 } : { useMaxWidth: false, wrappingWidth: 360 },
       er: { useMaxWidth: false },
       pie: { useMaxWidth: false },
       quadrantChart: { useMaxWidth: false },
@@ -4287,9 +4702,10 @@ function createRenderer(baseUrl2 = document.baseURI) {
     return renderQueue.schedule(async (signal) => {
       throwIfAborted(signal);
       const flowchart = isFlowchart(source);
+      const stateDiagram = isStateDiagram(source);
       const mermaid = await runtime(config, signal);
       throwIfAborted(signal);
-      initialize(mermaid, config, flowchart);
+      initialize(mermaid, config, flowchart, stateDiagram);
       const id = `mgpt-${Date.now().toString(36)}-${++sequence}`;
       const result = await mermaid.render(id, source);
       throwIfAborted(signal);

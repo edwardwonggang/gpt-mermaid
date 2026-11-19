@@ -244,6 +244,7 @@ function arrowRegions(svg, edges) {
 }
 
 export function placeEdgeLabels(svg) {
+  const stateDiagram = Boolean(svg.querySelector("path.transition"));
   const paths = new Map([...svg.querySelectorAll("[data-id]")].filter((p) => p instanceof SVGGeometryElement)
     .map((p) => [p.dataset.id, p]));
   const nodes = [...svg.querySelectorAll("g.node > .label-container, g.node > .outer-path")].map((n) => boundsInSvg(svg, n));
@@ -264,12 +265,16 @@ export function placeEdgeLabels(svg) {
   };
   // 先放固定通道与空间最紧的短边标签，避免长边抢占唯一可行位置。
   const space = new Map(labels.map((label) => [label, available(label)]));
-  labels.sort((a, b) => space.get(a) - space.get(b));
+  const labelBoxes = new Map(labels.map((label) => [label, boundsInSvg(svg, label)]));
+  // 宽标签更受线段长度限制，先占位；同宽时再放可用空间更小者。
+  labels.sort((a, b) => stateDiagram
+    ? (labelBoxes.get(b).width - labelBoxes.get(a).width) || (space.get(a) - space.get(b))
+    : space.get(a) - space.get(b));
   for (const label of labels) {
     const id = label.querySelector("[data-id]")?.dataset.id || label.dataset.id;
     const edge = paths.get(id);
     if (!edge) continue;
-    const box = boundsInSvg(svg, label), old = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    const box = labelBoxes.get(label), old = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
     if (box.width === 0 || box.height === 0) continue;
     if (edge.hasAttribute("data-gptm-label-x") && edge.hasAttribute("data-gptm-label-y")) {
       const target = { x: Number(edge.getAttribute("data-gptm-label-x")), y: Number(edge.getAttribute("data-gptm-label-y")) };
@@ -278,7 +283,7 @@ export function placeEdgeLabels(svg) {
         const before = fromSvg(svg, label.parentElement, old), after = fromSvg(svg, label.parentElement, target);
         shift(label, after.x - before.x, after.y - before.y);
         label.setAttribute("data-gptm-label-edge", edge.id);
-        occupied.push(proposed);
+        occupied.push({ ...proposed, label: true });
         continue;
       }
       edge.removeAttribute("data-gptm-label-x"); edge.removeAttribute("data-gptm-label-y");
@@ -292,11 +297,15 @@ export function placeEdgeLabels(svg) {
       const a = inSvg(svg, edge, edge.getPointAtLength(Math.max(0, offset - 4)));
       const b = inSvg(svg, edge, edge.getPointAtLength(Math.min(length, offset + 4)));
       const diagonal = Math.min(Math.abs(b.x - a.x), Math.abs(b.y - a.y));
-      const collision = [...nodes, ...occupied].filter((n) => overlaps(proposed, n)).length;
+      const collision = nodes.filter((n) => overlaps(proposed, n)).length
+        + occupied.filter((n) => overlaps(proposed, n, stateDiagram ? 1 : 5)).length;
       const arrowCollision = arrows.filter((n) => overlaps(proposed, n, 2)).length;
       const foreign = lines.filter((line) => line.edge !== edge
-        && line.points.some((p) => p.x > proposed.x - 2 && p.x < proposed.right + 2
-          && p.y > proposed.y - 2 && p.y < proposed.bottom + 2)).length;
+        && line.points.some((p) => stateDiagram
+          ? p.x > proposed.x + 0.5 && p.x < proposed.right - 0.5
+            && p.y > proposed.y + 0.5 && p.y < proposed.bottom - 0.5
+          : p.x > proposed.x - 2 && p.x < proposed.right + 2
+            && p.y > proposed.y - 2 && p.y < proposed.bottom + 2)).length;
       // 端点附近必须给箭头留空间；优先保留原标签所在段而非挪到另一条分支。
       const nearEnd = Math.min(offset, length - offset) < Math.max(box.width, box.height) / 2 + 16;
       candidates.push({ point, proposed, score: collision * 1e6 + arrowCollision * 1e6 + foreign * 1e5 + (nearEnd ? 1e4 : 0)
@@ -327,7 +336,46 @@ export function placeEdgeLabels(svg) {
     const before = fromSvg(svg, label.parentElement, old), after = fromSvg(svg, label.parentElement, target.point);
     shift(label, after.x - before.x, after.y - before.y);
     label.setAttribute("data-gptm-label-edge", edge.id);
-    occupied.push(target.proposed);
+    occupied.push({ ...target.proposed, label: true });
+  }
+  // 初放按顺序完成后再做有界冲突消解。只在冲突数明确下降时沿各自边移动，
+  // 因此标签中心仍在线上，也不会为了避让另一个标签而牺牲所属边。
+  const placed = (stateDiagram ? labels : []).map((label) => {
+    const id = label.querySelector("[data-id]")?.dataset.id || label.dataset.id;
+    return { label, edge: paths.get(id), box: boundsInSvg(svg, label) };
+  }).filter((item) => item.edge && item.label.textContent.trim());
+  const boxConflict = (a, b) => a.x < b.right + 1 && a.right > b.x - 1
+    && a.y < b.bottom + 1 && a.bottom > b.y - 1;
+  for (let pass = 0; pass < 2; pass++) {
+    let changed = false;
+    for (const item of placed) {
+      const conflicts = placed.filter((other) => other !== item && boxConflict(item.box, other.box)).length;
+      if (!conflicts) continue;
+      const length = item.edge.getTotalLength(), steps = Math.min(1200, Math.max(20, Math.ceil(length / 4)));
+      const old = { x: (item.box.x + item.box.right) / 2, y: (item.box.y + item.box.bottom) / 2 };
+      let best = null;
+      for (let index = 1; index < steps; index++) {
+        const point = inSvg(svg, item.edge, item.edge.getPointAtLength(length * index / steps));
+        const proposed = { x: point.x - item.box.width / 2, y: point.y - item.box.height / 2,
+          right: point.x + item.box.width / 2, bottom: point.y + item.box.height / 2 };
+        if (nodes.some((box) => overlaps(proposed, box)) || arrows.some((box) => overlaps(proposed, box, 2))) continue;
+        const nextConflicts = placed.filter((other) => other !== item && boxConflict(proposed, other.box)).length;
+        if (nextConflicts >= conflicts) continue;
+        const foreign = lines.filter((line) => line.edge !== item.edge
+          && line.points.some((p) => p.x > proposed.x + 0.5 && p.x < proposed.right - 0.5
+            && p.y > proposed.y + 0.5 && p.y < proposed.bottom - 0.5)).length;
+        const score = nextConflicts * 1e6 + foreign * 1e5 + Math.hypot(point.x - old.x, point.y - old.y);
+        if (!best || score < best.score) best = { point, proposed, score };
+      }
+      if (!best) continue;
+      const before = fromSvg(svg, item.label.parentElement, old);
+      const after = fromSvg(svg, item.label.parentElement, best.point);
+      shift(item.label, after.x - before.x, after.y - before.y);
+      item.box = best.proposed;
+      item.label.setAttribute("data-gptm-label-edge", item.edge.id);
+      changed = true;
+    }
+    if (!changed) break;
   }
 }
 

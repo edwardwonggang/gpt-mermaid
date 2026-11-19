@@ -17,7 +17,7 @@ import { verifyTouchGestures } from "./touch-gestures.mjs";
 import { BASE_GEOMETRY_EXPECTATIONS } from "./geometry-expectations.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = 4173;
+const PORT = Number(process.env.GPT_MERMAID_TEST_PORT || 4173);
 const output = path.join(ROOT, "output");
 await fs.mkdir(output, { recursive: true });
 const server = spawn(process.execPath, [path.join(ROOT, "scripts/serve.mjs")], {
@@ -114,9 +114,18 @@ try {
     const safeSvg = GPTMermaid.sanitizeSvg(
       '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><image href="https://evil.invalid/x.png"/><text>safe</text></svg>'
     );
-    const stateResult = await GPTMermaid.renderSvg(
-      "stateDiagram-v2\n[*] --> INIT\nINIT --> DISABLED : 使能关闭\nDISABLED --> WAIT_CONDITION : 开启命令保存成功"
-    );
+    const stateSource = `stateDiagram-v2
+[*] --> INIT
+INIT --> DISABLED: 使能=0
+INIT --> WAIT_CONDITION: 使能=1 且本轮未成功
+DISABLED --> WAIT_CONDITION: 使能置 1
+WAIT_CONDITION --> POS_MEASURE: 检测条件满足且周期到期
+POS_MEASURE --> NEG_MEASURE: 正母线计算成功
+POS_MEASURE --> WAIT_CONDITION: 正母线失败（不测负母线）
+NEG_MEASURE --> DONE: 负母线计算成功
+NEG_MEASURE --> WAIT_CONDITION: 负母线失败
+DONE --> DISABLED: 使能置 0`;
+    const stateResult = await GPTMermaid.renderSvg(stateSource);
     const stateHost = document.createElement("div");
     stateHost.innerHTML = stateResult.svg;
     document.body.append(stateHost);
@@ -135,6 +144,39 @@ try {
         : Infinity,
       border: stateRect ? getComputedStyle(stateRect).stroke : "",
       borderWidth: stateRect ? getComputedStyle(stateRect).strokeWidth : "",
+    };
+    const stateNodes = new Map([...stateHost.querySelectorAll("g.node[data-id]")].map((node) => {
+      const shape = node.querySelector(":scope > .label-container, :scope > .outer-path, :scope > rect, :scope > circle");
+      return [node.dataset.id, shape?.getBoundingClientRect()];
+    }).filter(([, box]) => box));
+    const stateDistance = (box, point) => box ? Math.hypot(
+      Math.max(box.left - point.x, 0, point.x - box.right),
+      Math.max(box.top - point.y, 0, point.y - box.bottom),
+    ) : Infinity;
+    const stateEdgeState = [...stateHost.querySelectorAll("path.transition[data-source]")].map((edge) => {
+      const length = edge.getTotalLength(), matrix = edge.getScreenCTM();
+      const startPoint = edge.getPointAtLength(0), endPoint = edge.getPointAtLength(length);
+      const start = new DOMPoint(startPoint.x, startPoint.y).matrixTransform(matrix);
+      const end = new DOMPoint(endPoint.x, endPoint.y).matrixTransform(matrix);
+      const label = stateHost.querySelector(`g.edgeLabel [data-id="${edge.dataset.id}"]`)?.parentElement?.textContent.trim() || "";
+      let points = [];
+      try { points = JSON.parse(atob(edge.getAttribute("data-points") || "")); } catch {}
+      const legs = points.slice(1).map((point, index) => Math.hypot(point.x - points[index].x, point.y - points[index].y));
+      return {
+        id: edge.dataset.id, source: edge.dataset.source, target: edge.dataset.target, label,
+        sourceGap: stateDistance(stateNodes.get(edge.dataset.source), start),
+        targetGap: stateDistance(stateNodes.get(edge.dataset.target), end),
+        rerouted: edge.hasAttribute("data-gptm-native-rerouted"),
+        bends: Math.max(0, points.length - 2), minLeg: legs.length ? Math.min(...legs) : 0,
+        orthogonal: points.slice(1).every((point, index) =>
+          Math.abs(point.x - points[index].x) < 0.75 || Math.abs(point.y - points[index].y) < 0.75),
+      };
+    });
+    const stateRouting = {
+      nativeRoutes: Number(stateHost.querySelector("svg")?.getAttribute("data-gptm-native-routes")),
+      crossingsBefore: Number(stateHost.querySelector("svg")?.getAttribute("data-gptm-crossings-before")),
+      crossingRoutes: Number(stateHost.querySelector("svg")?.getAttribute("data-gptm-crossing-routes")),
+      edges: stateEdgeState,
     };
     stateHost.remove();
     const attach = (svgText) => {
@@ -201,6 +243,7 @@ try {
       connectionGaps,
       safeSvg,
       stateGeometry,
+      stateRouting,
     };
   });
   assert(programmatic.width > 0 && programmatic.height > 0);
@@ -213,6 +256,22 @@ try {
   assert(programmatic.stateGeometry.centerDelta < 1, JSON.stringify(programmatic.stateGeometry));
   assert.equal(programmatic.stateGeometry.border, "rgb(91, 143, 189)");
   assert.equal(programmatic.stateGeometry.borderWidth, "1.5px");
+  assert.equal(programmatic.stateRouting.edges.length, 10, JSON.stringify(programmatic.stateRouting));
+  assert.equal(programmatic.stateRouting.nativeRoutes, 10, JSON.stringify(programmatic.stateRouting));
+  for (const edge of programmatic.stateRouting.edges) {
+    assert(edge.rerouted, `state transition 必须采用干净轴线路由：${JSON.stringify(edge)}`);
+    assert(edge.orthogonal, `state transition 混入斜线：${JSON.stringify(edge)}`);
+    assert(edge.bends <= 4, `state transition 出现过度回折：${JSON.stringify(edge)}`);
+    assert(edge.minLeg >= 12, `state transition 出现补丁式短折弯：${JSON.stringify(edge)}`);
+    assert(edge.sourceGap < 2, `state transition 起点脱离声明节点：${JSON.stringify(edge)}`);
+    assert(edge.targetGap < 2, `state transition 终点脱离声明节点：${JSON.stringify(edge)}`);
+  }
+  assert(
+    ["使能=0", "使能=1 且本轮未成功", "使能置 1", "检测条件满足且周期到期",
+      "正母线计算成功", "正母线失败（不测负母线）", "负母线计算成功", "负母线失败", "使能置 0"]
+      .every((label) => programmatic.stateRouting.edges.some((edge) => edge.label === label)),
+    JSON.stringify(programmatic.stateRouting.edges)
+  );
   const edges = programmatic.directions.flatMap((diagram) => diagram.edges);
   const directionColors = {
     right: "rgb(37, 99, 235)",

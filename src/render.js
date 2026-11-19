@@ -51,6 +51,15 @@ export function isFlowchart(source) {
   return false;
 }
 
+export function isStateDiagram(source) {
+  for (const line of bodyAfterFrontmatter(String(source || "").split(/\r?\n/))) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("%%")) continue;
+    return /^stateDiagram(?:-v2)?\b/.test(trimmed);
+  }
+  return false;
+}
+
 function ensureCssClass(node, name) {
   const current = node.getAttribute("class") || "";
   if (!current.split(/\s+/).includes(name)) node.setAttribute("class", `${current} ${name}`.trim());
@@ -557,6 +566,13 @@ function postProcessSvg(svgMarkup, variables, graph, config = {}) {
     repairSequenceConnections(live);
     placeEdgeLabels(live);
     resolveEdgeCrossings(live, repairEdgeConnections);
+    if (live.classList?.contains("statediagram")) {
+      // 通用交叉器负责发现并清掉全局冲突；state 最终几何必须再由专用
+      // 正交路由器写回，避免其斜线候选成为最终可见路径。
+      routeNativeEdges(live);
+      repairEdgeConnections(live);
+      placeEdgeLabels(live);
+    }
     if (graph || Number(live.getAttribute("data-gptm-native-routes")) > 0
         || live.hasAttribute("data-gptm-planar-layout")
         || Number(live.getAttribute("data-gptm-spacing-factor")) > 1) fitSvgBounds(live);
@@ -632,9 +648,10 @@ export function createRenderer(baseUrl = document.baseURI) {
     });
   }
 
-  function initialize(mermaid, config, flowchart) {
+  function initialize(mermaid, config, flowchart, stateDiagram) {
     const layout = flowchart ? "elk" : "dagre";
-    const nextKey = JSON.stringify({ preset: config.preset, themeVariables: config.themeVariables, isDark: config.isDark, layout });
+    const nextKey = JSON.stringify({ preset: config.preset, themeVariables: config.themeVariables,
+      isDark: config.isDark, layout, state: stateDiagram ? "wide" : "default" });
     if (initialized && configKey === nextKey) return;
     mermaid.initialize({
       startOnLoad: false,
@@ -661,7 +678,9 @@ export function createRenderer(baseUrl = document.baseURI) {
       class: { useMaxWidth: false },
       // 状态图默认 wrappingWidth 约 120，会把 WAIT_CONDITION 这类状态名
       // 强行拆行；放宽到 360 后由节点宽度自然决定是否换行。
-      state: { useMaxWidth: false, wrappingWidth: 360 },
+      state: stateDiagram
+        ? { useMaxWidth: false, wrappingWidth: 360, nodeSpacing: 140, rankSpacing: 90 }
+        : { useMaxWidth: false, wrappingWidth: 360 },
       er: { useMaxWidth: false },
       pie: { useMaxWidth: false },
       quadrantChart: { useMaxWidth: false },
@@ -692,9 +711,10 @@ export function createRenderer(baseUrl = document.baseURI) {
     return renderQueue.schedule(async (signal) => {
       throwIfAborted(signal);
       const flowchart = isFlowchart(source);
+      const stateDiagram = isStateDiagram(source);
       const mermaid = await runtime(config, signal);
       throwIfAborted(signal);
-      initialize(mermaid, config, flowchart);
+      initialize(mermaid, config, flowchart, stateDiagram);
       const id = `mgpt-${Date.now().toString(36)}-${++sequence}`;
       const result = await mermaid.render(id, source);
       throwIfAborted(signal);
