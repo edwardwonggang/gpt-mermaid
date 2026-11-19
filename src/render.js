@@ -296,7 +296,7 @@ function layoutPoints(edge) {
 }
 
 function nodeOutlines(svg) {
-  return [...svg.querySelectorAll("g.node, g.cluster")].map((node) => {
+  return [...svg.querySelectorAll("g.node, g.cluster, g.statediagram-cluster")].map((node) => {
     const container = nodeShape(node);
     if (!container) return null;
     const shape = container instanceof SVGGeometryElement ? container : container.querySelector("path,rect,polygon,circle,ellipse");

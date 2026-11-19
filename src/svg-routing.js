@@ -9,7 +9,8 @@ const EPS = 0.05;
 const PORT_GAP = 18;
 const CLEARANCE = 10;
 const BEND_COST = 22;
-const SHORT_LEG = 8;
+// 40 单位控制引线减去7单位圆角和描边后，仍有至少32单位可见法向直线。
+const STATE_PORT_LEAD = 40;
 const near = (a, b) => Math.abs(a - b) < EPS;
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -176,7 +177,10 @@ export function orthogonalRoute(start, end, boxes, clearance = CLEARANCE, occupi
           || index === endIndex && backwards(directions.end)) continue;
       const segmentKey = current.index < index ? `${current.index}:${index}` : `${index}:${current.index}`;
       if (!visibility.has(segmentKey)) visibility.set(segmentKey, !segmentBlocked(a, b, boxes)
-        && !(directions.avoidSegments || []).some(([p, q]) => segmentIntersection(a, b, p, q)));
+        && !(directions.avoidSegments || []).some(segment => {
+          const hit = segmentIntersection(a, b, segment[0], segment[1]);
+          return hit && !directions.allowJunction?.(hit, segment);
+        }));
       if (!visibility.get(segmentKey)) continue;
       let congestion = congestionCache.get(segmentKey);
       if (congestion === undefined) {
@@ -447,7 +451,7 @@ export function labelOnRoute(svg, points, size, barriers, occupied, original) {
 // 原生状态/类图可能从同一个斜向端口同时进出。仅处理实际渲染时带身份的边，
 // 不重新解析有全局domId计数的类图，也不改变菱形/基数/lollipop端点的偏移契约。
 export function routeNativeEdges(svg, options = {}) {
-  const nodes = new Map([...svg.querySelectorAll("g.node[data-id]")].map((element) => {
+  const nodes = new Map([...svg.querySelectorAll("g.node[data-id],g.statediagram-cluster[data-id]")].map((element) => {
     const shape = nodeShape(element);
     return [element.dataset.id, shape && { element, shape, box: boundsInSvg(svg, shape) }];
   }).filter(([, node]) => node));
@@ -455,6 +459,11 @@ export function routeNativeEdges(svg, options = {}) {
   const edges = native.map((element) => {
     const source = nodes.get(element.dataset.source), target = nodes.get(element.dataset.target), raw = readPoints(element);
     if (!source || !target || !raw) return null;
+    // state 会在全局避障后重算；旧标签保留点可能属于被替换的路径，不能跨轮沿用。
+    if (element.classList?.contains("transition")) {
+      element.removeAttribute("data-gptm-label-x");
+      element.removeAttribute("data-gptm-label-y");
+    }
     element.setAttribute("data-gptm-source", source.element.id);
     element.setAttribute("data-gptm-target", target.element.id);
     const compatible = ["marker-start", "marker-end"].every((attribute) => {
@@ -482,12 +491,25 @@ export function routeNativeEdges(svg, options = {}) {
     if (edge.source !== edge.target || !edge.compatible) continue;
     const label = loopLabels.get(edge.element.dataset.id), size = label ? boundsInSvg(svg, label) : { width: 0, height: 0 };
     const initial = sideOf(edge.points[0], edge.points[1]);
-    const obstacles = [...nodes.values()].filter((node) => node !== edge.source).map((node) => node.box);
+    const obstacles = [...nodes.values()].filter((node) => node !== edge.source
+      && !node.element.contains(edge.source.element)).map((node) => node.box);
     for (const side of [initial, ...["right", "left", "bottom", "top"].filter((s) => s !== initial)]) {
       const laneKey = edge.source.element.id;
       const lane = loopLanes.get(laneKey) || 0;
-      const points = loopRoute(edge.source.box, side, size, 0, lane,
+      let points = loopRoute(edge.source.box, side, size, 0, lane,
         loopCounts.get(laneKey) || 1);
+      if (edge.state) {
+        const box = edge.source.box, adjacent = { right: "top", top: "left", left: "bottom", bottom: "right" }[side];
+        const centerPort = direction => onSide(box, direction, horizontalSide(direction)
+          ? (box.y + box.bottom) / 2 : (box.x + box.right) / 2);
+        const a = centerPort(side), b = centerPort(adjacent);
+        const reach = Math.max(STATE_PORT_LEAD, size.width + 24) + lane * STATE_PORT_LEAD;
+        const first = { ...a }, last = { ...b };
+        first[horizontalSide(side) ? "x" : "y"] += signOf(side) * reach;
+        last[horizontalSide(adjacent) ? "x" : "y"] += signOf(adjacent) * STATE_PORT_LEAD;
+        const corner = horizontalSide(side) ? { x: first.x, y: last.y } : { x: last.x, y: first.y };
+        points = [a, first, corner, last, b];
+      }
       if (!clearRoute(points, obstacles, 4)) continue;
       const center = { x: (points[1].x + points[2].x) / 2, y: (points[1].y + points[2].y) / 2 };
       const reservation = nativeLabelBox(center, size);
@@ -520,7 +542,7 @@ export function routeNativeEdges(svg, options = {}) {
   }
   const changed = new Set();
   for (const group of groups.values()) {
-    if (group.length < 2 || group.some((port) => !port.edge.compatible)) continue;
+    if (group.length < 2 || group.some((port) => port.edge.state || !port.edge.compatible)) continue;
     group.sort((a, b) => a.value - b.value);
     if (!group.some((port, i) => i && port.value - group[i - 1].value < PORT_GAP)) continue;
     const { node, side } = group[0], box = node.box, horizontal = horizontalSide(side);
@@ -533,99 +555,6 @@ export function routeNativeEdges(svg, options = {}) {
       const previous = Number(port.edge.element.getAttribute("data-gptm-port-span")) || Infinity;
       port.edge.element.setAttribute("data-gptm-port-span", String(Math.min(previous, spacing)));
       changed.add(port.edge);
-    });
-  }
-  if (svg.classList?.contains("statediagram")) {
-    for (const group of groups.values()) {
-      if (group.length < 2 || horizontalSide(group[0].side)) continue;
-      const node = group[0].node;
-      // 原生布局已给同侧纯入边分配了有序端口；来源就在这一侧时保持该顺序。
-      // 仅凭横向偏移把它们全部搬到侧面，会让正常的上方汇入也变成绕侧入框。
-      if (group.every(port => !port.start && signOf(port.side)
-        * (port.edge.source.box.y + port.edge.source.box.height / 2 - node.box.y - node.box.height / 2) > 0)) continue;
-      for (const port of group) {
-        const other = port.start ? port.edge.target : port.edge.source;
-        const otherCenterX = other.box.x + other.box.width / 2;
-        if (otherCenterX >= node.box.x - 4 && otherCenterX <= node.box.right + 4) continue;
-        const side = otherCenterX < node.box.x ? "left" : "right";
-        port.side = side;
-        port.anchor = onSide(node.box, side, node.box.y + node.box.height / 2);
-        port.value = port.anchor.y;
-      }
-    }
-    const sides = new Map();
-    for (const port of ports.values()) {
-      if (!port.edge.compatible) continue;
-      const key = `${port.node.element.id}\0${port.side}`;
-      if (!sides.has(key)) sides.set(key, []);
-      sides.get(key).push(port);
-    }
-    for (const group of sides.values()) {
-      if (group.length < 2) continue;
-      group.sort((a, b) => a.value - b.value);
-      if (!group.some((port, index) => index && port.value - group[index - 1].value < PORT_GAP)) continue;
-      const node = group[0].node, horizontal = horizontalSide(group[0].side);
-      const low = horizontal ? node.box.y : node.box.x;
-      const span = horizontal ? node.box.height : node.box.width;
-      const margin = Math.min(12, span * 0.2);
-      const spacing = Math.min(24, (span - margin * 2) / (group.length - 1));
-      group.forEach((port, index) => {
-        const value = low + span / 2 + (index - (group.length - 1) / 2) * spacing;
-        port.anchor = onSide(node.box, port.side, value);
-        port.value = value;
-      });
-    }
-  }
-  // 起止圆点只有14px，两个进入方向即使相差4px也会让三角重叠。
-  // 小圆节点的多条兼容边统一按圆周分配方向，而不是继续按“上/左”侧分组。
-  for (const node of svg.classList?.contains("statediagram") ? nodes.values() : []) {
-    if (node.box.width > 24 || node.box.height > 24) continue;
-    const radial = [...ports.values()].filter((port) => port.node === node && port.edge.compatible);
-    if (radial.length < 2) continue;
-    const center = { x: node.box.x + node.box.width / 2, y: node.box.y + node.box.height / 2 };
-    const radiusX = node.box.width / 2, radiusY = node.box.height / 2;
-    radial.sort((a, b) => Math.atan2(a.anchor.y - center.y, a.anchor.x - center.x)
-      - Math.atan2(b.anchor.y - center.y, b.anchor.x - center.x));
-    const usedSides = new Set();
-    const sideVector = { top: [0, -1], right: [1, 0], bottom: [0, 1], left: [-1, 0] };
-    const centers = new Map(radial.map((port) => {
-      const other = port.start ? port.edge.target : port.edge.source;
-      return [port, { x: other.box.x + other.box.width / 2 - center.x,
-        y: other.box.y + other.box.height / 2 - center.y }];
-    }));
-    const oneSided = radial.length === 3 && [...centers.values()].every((delta) => delta.y < 0)
-      ? ["left", "top", "right"]
-      : radial.length === 3 && [...centers.values()].every((delta) => delta.y > 0)
-        ? ["left", "bottom", "right"] : null;
-    const ordered = oneSided ? radial.slice().sort((a, b) => centers.get(a).x - centers.get(b).x) : radial;
-    ordered.forEach((port, index) => {
-      let side, x, y;
-      if (oneSided) {
-        side = oneSided[index];
-        ({ x, y } = onSide(node.box, side, horizontalSide(side) ? center.y : center.x));
-      } else if (radial.length <= 4) {
-        const { x: dx, y: dy } = centers.get(port);
-        const desired = Math.abs(dx) > Math.abs(dy) ? dx > 0 ? "right" : "left" : dy > 0 ? "bottom" : "top";
-        const available = ["top", "right", "bottom", "left"].filter((candidate) => !usedSides.has(candidate));
-        side = available.includes(desired) ? desired : available.sort((left, right) => {
-          const score = (candidate) => {
-            const [vx, vy] = sideVector[candidate];
-            return -((dx * vx + dy * vy) / Math.max(1, Math.hypot(dx, dy)));
-          };
-          return score(left) - score(right);
-        })[0];
-        usedSides.add(side);
-        ({ x, y } = onSide(node.box, side, horizontalSide(side) ? center.y : center.x));
-      } else {
-        const angle = -Math.PI / 2 + index * Math.PI * 2 / radial.length;
-        x = center.x + Math.cos(angle) * radiusX;
-        y = center.y + Math.sin(angle) * radiusY;
-        side = Math.abs(Math.cos(angle)) > Math.abs(Math.sin(angle))
-          ? Math.cos(angle) > 0 ? "right" : "left" : Math.sin(angle) > 0 ? "bottom" : "top";
-      }
-      port.anchor = { x, y };
-      port.side = side;
-      port.value = horizontalSide(port.side) ? y : x;
     });
   }
   const boxes = [...nodes.values()].map((node) => node.box), occupied = [];
@@ -661,96 +590,59 @@ export function routeNativeEdges(svg, options = {}) {
     const label = labelById.get(edge.element.dataset.id);
     return [edge, label?.textContent.trim() ? boundsInSvg(svg, label) : null];
   }));
-  // 反向边对的标签最容易在线性端口整理后互相覆盖。仅对这种有向边对，
-  // 按两侧标签宽度把共同节点的端口对称分开；单向边保持原端口。
-  const reversePairs = new Map();
-  for (const edge of edges) {
-    if (!edge.state || !edge.compatible || edge.source === edge.target) continue;
-    const key = [edge.source.element.id, edge.target.element.id].sort().join("\0");
-    const pair = reversePairs.get(key) || [];
-    pair.push(edge);
-    reversePairs.set(key, pair);
+  // 状态框只提供四边中点。同一侧不能同时承载相反方向，否则箭头会压在出线上；
+  // 同向多边保留共同端口，在框外的直线段末端分叉/汇合。
+  for (const node of nodes.values()) {
+    const statePorts = [...ports.values()].filter(p => p.node === node && p.edge.state && p.edge.compatible
+      && p.edge.source !== p.edge.target);
+    const incoming = new Set(statePorts.filter(p => !p.start).map(p => p.side));
+    for (const port of statePorts.filter(p => p.start && incoming.has(p.side))) {
+      const other = port.edge.target.box;
+      const choices = ["top", "bottom", "left", "right"].filter(side => !incoming.has(side));
+      const cost = side => {
+        const anchor = onSide(node.box, side, horizontalSide(side)
+          ? (node.box.y + node.box.bottom) / 2 : (node.box.x + node.box.right) / 2);
+        const axis = horizontalSide(side) ? "x" : "y";
+        anchor[axis] += signOf(side) * STATE_PORT_LEAD;
+        return Math.abs(anchor.x - (other.x + other.right) / 2) + Math.abs(anchor.y - (other.y + other.bottom) / 2);
+      };
+      choices.sort((a, b) => cost(a) - cost(b));
+      if (choices.length) port.side = choices[0];
+    }
+    for (const port of statePorts) {
+      port.anchor = onSide(node.box, port.side, horizontalSide(port.side)
+        ? (node.box.y + node.box.bottom) / 2 : (node.box.x + node.box.right) / 2);
+      port.value = port.anchor[horizontalSide(port.side) ? "y" : "x"];
+    }
   }
-  for (const pair of reversePairs.values()) {
-    if (pair.length !== 2 || pair[0].source !== pair[1].target || pair[0].target !== pair[1].source) continue;
-    const [first, second] = pair;
-    const adjust = (leftPort, rightPort) => {
-      if (!leftPort || !rightPort || leftPort.side !== rightPort.side) return;
-      const box = leftPort.node.box, horizontal = horizontalSide(leftPort.side);
-      const cross = horizontal ? box.y : box.x;
-      const span = horizontal ? box.height : box.width;
-      const low = cross + 2, high = cross + span - 2;
-      const firstWidth = labelSizes.get(first)?.width || labelSizes.get(first)?.height || 0;
-      const secondWidth = labelSizes.get(second)?.width || labelSizes.get(second)?.height || 0;
-      const gap = Math.min(high - low, Math.max(PORT_GAP, (firstWidth + secondWidth) / 2 + 10));
-      const center = cross + span / 2;
-      leftPort.anchor[horizontal ? "y" : "x"] = Math.max(low, Math.min(high, center - gap / 2));
-      rightPort.anchor[horizontal ? "y" : "x"] = Math.max(low, Math.min(high, center + gap / 2));
-      leftPort.value = leftPort.anchor[horizontal ? "y" : "x"];
-      rightPort.value = rightPort.anchor[horizontal ? "y" : "x"];
-    };
-    adjust(ports.get(`${first.element.id}:true`), ports.get(`${second.element.id}:false`));
-    adjust(ports.get(`${first.element.id}:false`), ports.get(`${second.element.id}:true`));
-  }
+  const stateApproaches = [...ports.values()].filter(port => port.edge.state && port.edge.source !== port.edge.target)
+    .map(port => {
+      const horizontal = horizontalSide(port.side), p = port.anchor, out = signOf(port.side) * STATE_PORT_LEAD;
+      return { x: horizontal ? Math.min(p.x, p.x + out) : p.x - 3,
+        right: horizontal ? Math.max(p.x, p.x + out) : p.x + 3,
+        y: horizontal ? p.y - 3 : Math.min(p.y, p.y + out),
+        bottom: horizontal ? p.y + 3 : Math.max(p.y, p.y + out) };
+    });
   // 先给更宽的标签分配有限空隙；小标签通常能沿剩余路径移动。
   const routingOrder = edges.filter((edge) => edge.compatible)
     .sort((a, b) => {
       if (a.state !== b.state) return a.state ? -1 : 1;
       if (a.state) {
-        if (options.retry) {
-          const failedA = options.failed?.has(a.element.id) ? 1 : 0;
-          const failedB = options.failed?.has(b.element.id) ? 1 : 0;
-          if (failedA !== failedB) return failedA - failedB;
-        }
-        const tinyRank = (edge) => {
-          const port = ports.get(`${edge.element.id}:false`);
-          return edge.target.box.width <= 24 && edge.target.box.height <= 24
-            && port && horizontalSide(port.side) ? 0 : 1;
-        };
-        if (tinyRank(a) !== tinyRank(b)) return tinyRank(a) - tinyRank(b);
-        // 同一节点的出边先走，给入边留下明确的绕入通道。
-        if (a.source.element.id === b.target.element.id) return -1;
-        if (b.source.element.id === a.target.element.id) return 1;
-        if (options.retry) {
-          const sourceY = (edge) => ports.get(`${edge.element.id}:true`)?.anchor.y || 0;
-          return sourceY(b) - sourceY(a);
-        }
+        // 端口法向已预留，不再依赖进出边两两比较的非传递排序；保留原生稳定顺序。
         return 0;
       }
       return (labelSizes.get(b)?.width || 0) - (labelSizes.get(a)?.width || 0);
     });
   for (const edge of routingOrder) {
     if (edge.source === edge.target) continue;
-    const foreign = [...nodes.values()].filter((node) => node !== edge.source && node !== edge.target).map((node) => node.box);
+    // 复合状态的容器包住其内部状态；内部连线不能把祖先容器整块当墙。
+    const scopedNodes = [...nodes.values()].filter(node => node === edge.source || node === edge.target
+      || !node.element.contains(edge.source.element) && !node.element.contains(edge.target.element));
+    const foreign = scopedNodes.filter((node) => node !== edge.source && node !== edge.target).map((node) => node.box);
     const a = ports.get(`${edge.element.id}:true`), b = ports.get(`${edge.element.id}:false`);
-    const retrying = edge.state && options.retry && options.failed?.has(edge.element.id);
-    if (retrying) {
-      const opposite = { left: "right", right: "left", top: "bottom", bottom: "top" }[b.side];
-      b.side = opposite;
-      b.anchor = onSide(b.node.box, opposite,
-        horizontalSide(opposite) ? b.node.box.y + b.node.box.height / 2 : b.node.box.x + b.node.box.width / 2);
-      b.value = horizontalSide(opposite) ? b.anchor.y : b.anchor.x;
-    }
-    let directAxis = "";
-    if (edge.state) {
-      const dx = Math.abs(a.anchor.x - b.anchor.x), dy = Math.abs(a.anchor.y - b.anchor.y);
-      const axis = dx < SHORT_LEG * 1.5 && dy > dx * 2 ? "x"
-        : dy < SHORT_LEG * 1.5 && dx > dy * 2 ? "y" : "";
-      directAxis = axis;
-      if (axis) {
-        const low = Math.max(a.node.box[axis] + 2, b.node.box[axis] + 2);
-        const high = Math.min(a.node.box[axis === "x" ? "right" : "bottom"] - 2,
-          b.node.box[axis === "x" ? "right" : "bottom"] - 2);
-        if (low <= high) {
-          const common = Math.max(low, Math.min(high, (a.anchor[axis] + b.anchor[axis]) / 2));
-          a.anchor[axis] = common;
-          b.anchor[axis] = common;
-        }
-      }
-    }
     const lead = (port) => {
       const point = { ...port.anchor }, axis = horizontalSide(port.side) ? "x" : "y";
-      point[axis] += signOf(port.side) * 24;
+      point[axis] += signOf(port.side) * (edge.state ? STATE_PORT_LEAD : 24);
       return point;
     };
     // 包围盒侧面只用于布局锚点；render.js 随后按精确归属求真实轮廓接触点。
@@ -758,26 +650,17 @@ export function routeNativeEdges(svg, options = {}) {
     const vector = (a, b) => ({ x: b.x - a.x, y: b.y - a.y });
     const directions = { start: vector(a.anchor, start), end: vector(end, b.anchor) };
     if (edge.state) {
-      // stateDiagram 的视觉契约是清晰的轴向连线。只避开真实节点，不用其它边的
-      // 箭头保护框或标签预留区作硬障碍；原生标签中心作为 waypoint，避免改路后
-      // 再把标签挤到相邻边上。
+      // stateDiagram 从固定中点的引线端寻路；避开真实节点与已放标签，
+      // 不把其它端口的箭头外接框当节点。原生标签中心只作为可选通道。
       const size = labelSizes.get(edge);
-      const barriers = [...(retrying ? boxes : foreign), ...reservedLabels];
-      const labelBarriers = [...boxes, ...reservedLabels];
+      const barriers = [...scopedNodes.map(node => node.box), ...reservedLabels];
+      const labelBarriers = [...scopedNodes.map(node => node.box), ...stateApproaches, ...reservedLabels];
       const candidates = [];
       const considerStateRoute = (route) => {
         const raw = route && [a.anchor, ...route, b.anchor];
         if (!raw) return;
-        // 标签 waypoint 与端口只差一两像素时，先吸附到共同的端口轴线，
-        // 否则最终会出现看得见的 1px 小折腿；碰撞盒只允许这种级别的确定性微调。
-        const snapped = raw.map((point) => {
-          const x = Math.abs(point.x - a.anchor.x) < SHORT_LEG ? a.anchor.x
-            : Math.abs(point.x - b.anchor.x) < SHORT_LEG ? b.anchor.x : point.x;
-          const y = Math.abs(point.y - a.anchor.y) < SHORT_LEG ? a.anchor.y
-            : Math.abs(point.y - b.anchor.y) < SHORT_LEG ? b.anchor.y : point.y;
-          return { x, y };
-        });
-        for (const points of [simplifyPoints(snapped), simplifyPoints(raw)]) {
+        // 固定端口不得为了消除短折腿吸附到另一节点的轴线；短腿直接拒绝并另选通道。
+        for (const points of [simplifyPoints(raw)]) {
           const quality = routeQuality(points);
           const crossesEndpoint = (node, skip) => points.slice(1).some((point, index) =>
             index !== skip && segmentBlocked(points[index], point, [node.box], -1));
@@ -793,23 +676,57 @@ export function routeNativeEdges(svg, options = {}) {
           if (!outsidePort(a.anchor, points[1], a.side) || !outsidePort(b.anchor, points.at(-2), b.side)) continue;
           // 首尾引线允许贴离源/目标边界，其余段不得穿过它们自身。
           if (crossesEndpoint(edge.source, 0) || crossesEndpoint(edge.target, points.length - 2)) continue;
-          if (points.slice(1).some((point, index) => distance(points[index], point) < SHORT_LEG)) continue;
-          const committedHits = points.slice(1).flatMap((point, index) => occupied.map(([from, to]) => {
+          if (distance(points[0], points[1]) < STATE_PORT_LEAD - EPS
+              || distance(points.at(-1), points.at(-2)) < STATE_PORT_LEAD - EPS) continue;
+          if (points.slice(1).some((point, index) => distance(points[index], point) < 12 - EPS)) continue;
+          const committedHits = points.slice(1).flatMap((point, index) => occupied.map((segment) => {
+            const [from, to] = segment;
             const hit = segmentIntersection(points[index], point, from, to);
-            return hit && hit.kind !== "touch" ? hit : null;
+            return hit && hit.kind !== "touch" && !sharedTerminal(segment.edge, points, hit) ? hit : null;
           }).filter(Boolean));
-          // 小圆终止节点只有 14px，多个入边必须在圆周分端口。允许端口附近的
-          // 汇合接触，但远处与既有线交叉仍是硬障碍；否则会把整条边放行穿线。
-          const tinyTarget = edge.target.box.width <= 24 && edge.target.box.height <= 24;
-          const nearTinyPort = tinyTarget && committedHits.every((hit) => distance(hit, b.anchor) <= 28);
-          if (committedHits.length && !nearTinyPort) continue;
+          if (committedHits.length) continue;
           const reservation = size && labelOnRoute(svg, points, size, labelBarriers, occupied);
           // 先找标签可完整落在本线上的候选；确实没有时仍保留干净正交路径，
           // 由最终标签定位选择次优位置，不能退回上游曲线。
           const reservationPenalty = size && !reservation ? 1e6 : 0;
-          candidates.push({ points, reservation, score: quality.score + (reservation?.score || 0) * 0.02 + reservationPenalty });
+          candidates.push({ points, reservation,
+            score: quality.score + (reservation?.score || 0) * 0.02 + reservationPenalty });
           break;
         }
+      };
+      const sharedTerminal = (other, points, hit) => {
+        if (!other) return false;
+        return [true, false].some(start => {
+          if ((start ? edge.source : edge.target) !== (start ? other.source : other.target)) return false;
+          const own = start ? points : points.slice().reverse();
+          const theirs = start ? other.points : other.points.slice().reverse();
+          if (distance(own[0], theirs[0]) > EPS) return false;
+          const shared = segmentIntersection(own[0], own[1], theirs[0], theirs[1]);
+          if (shared?.kind !== "overlap") return false;
+          const axis = Math.abs(own[1].x - own[0].x) > EPS ? "x" : "y", cross = axis === "x" ? "y" : "x";
+          return Math.abs(hit[cross] - own[0][cross]) < EPS
+            && hit[axis] >= Math.max(Math.min(own[0][axis], own[1][axis]), Math.min(theirs[0][axis], theirs[1][axis])) - EPS
+            && hit[axis] <= Math.min(Math.max(own[0][axis], own[1][axis]), Math.max(theirs[0][axis], theirs[1][axis])) + EPS;
+        });
+      };
+      // 已有同向端口直线可共享；其它已提交段仍是障碍，最终候选再按实际公共前/后缀核对。
+      const stateWalls = () => occupied.filter(segment => {
+        const other = segment.edge;
+        if (!other) return true;
+        return ![true, false].some(first => {
+          if ((first ? edge.source : edge.target) !== (first ? other.source : other.target)) return false;
+          const port = first ? a : b, q = first ? other.points : other.points.slice().reverse();
+          return distance(port.anchor, q[0]) < EPS
+            && segmentIntersection(segment[0], segment[1], q[0], q[1])?.kind === "overlap";
+        });
+      });
+      const search = (from, to, obstacles, clearance, congestion, dir) => {
+        const walls = stateWalls(), result = orthogonalRoute(from, to, obstacles, clearance, congestion, {
+          ...dir, avoidSegments: walls,
+          allowJunction: (hit, segment) => hit.kind === "touch"
+            && sharedTerminal(segment.edge, [a.anchor, start, end, b.anchor], hit),
+        });
+        return result;
       };
       if (size) {
         const center = { x: size.x + size.width / 2, y: size.y + size.height / 2 };
@@ -817,65 +734,33 @@ export function routeNativeEdges(svg, options = {}) {
           const enter = horizontal ? { x: center.x - 8, y: center.y } : { x: center.x, y: center.y - 8 };
           const exit = horizontal ? { x: center.x + 8, y: center.y } : { x: center.x, y: center.y + 8 };
           const through = vector(enter, exit);
-          const before = orthogonalRoute(start, enter, barriers, CLEARANCE, occupied,
-            { ...directions, end: through, avoidSegments: occupied });
-          const after = orthogonalRoute(exit, end, barriers, CLEARANCE, occupied,
-            { start: through, end: directions.end, avoidSegments: occupied });
+          const before = search(start, enter, barriers, CLEARANCE, occupied,
+            { ...directions, end: through });
+          const after = search(exit, end, barriers, CLEARANCE, occupied,
+            { start: through, end: directions.end });
           if (before && after) considerStateRoute([...before, ...after]);
         }
       }
-      considerStateRoute(orthogonalRoute(start, end, barriers, CLEARANCE, occupied,
-        { ...directions, avoidSegments: occupied }));
+      considerStateRoute(search(start, end, barriers, CLEARANCE, occupied, directions));
       if (size && !candidates.some((candidate) => candidate.reservation)) {
         const gapX = Math.max(30, size.width / 2 + 12), gapY = Math.max(30, size.height / 2 + 12);
         const extra = {
           ...directions,
-          avoidSegments: occupied,
           extraX: [a.anchor.x - gapX, a.anchor.x + gapX, b.anchor.x - gapX, b.anchor.x + gapX],
           extraY: [a.anchor.y - gapY, a.anchor.y + gapY, b.anchor.y - gapY, b.anchor.y + gapY],
         };
-        considerStateRoute(orthogonalRoute(start, end, barriers, CLEARANCE, occupied, extra));
-        if (!candidates.some((candidate) => candidate.reservation)) {
-          considerStateRoute(orthogonalRoute(start, end, barriers, CLEARANCE, occupied,
-            { ...extra, avoidSegments: undefined }));
-        }
+        considerStateRoute(search(start, end, barriers, CLEARANCE, occupied, extra));
       }
-      if (!candidates.some((candidate) => candidate.reservation)) {
-        const around = (low, high) => {
-          const span = high - low;
-          return [low + span / 2, low + span / 3, low + span * 2 / 3, low - 30, high + 30];
-        };
-        if (!horizontalSide(a.side) && !horizontalSide(b.side)) {
-          for (const y of around(Math.min(a.anchor.y, b.anchor.y), Math.max(a.anchor.y, b.anchor.y))) {
-            considerStateRoute([{ x: a.anchor.x, y }, { x: b.anchor.x, y }]);
-          }
-        } else if (horizontalSide(a.side) && horizontalSide(b.side)) {
-          for (const x of around(Math.min(a.anchor.x, b.anchor.x), Math.max(a.anchor.x, b.anchor.x))) {
-            considerStateRoute([{ x, y: a.anchor.y }, { x, y: b.anchor.y }]);
-          }
-        } else {
-          for (const y of around(Math.min(a.anchor.y, b.anchor.y), Math.max(a.anchor.y, b.anchor.y))) {
-            considerStateRoute([{ x: a.anchor.x, y }, { x: b.anchor.x, y }]);
-          }
-          for (const x of around(Math.min(a.anchor.x, b.anchor.x), Math.max(a.anchor.x, b.anchor.x))) {
-            considerStateRoute([{ x, y: a.anchor.y }, { x, y: b.anchor.y }]);
-          }
-          considerStateRoute([{ x: b.anchor.x, y: a.anchor.y }]);
-          considerStateRoute([{ x: a.anchor.x, y: b.anchor.y }]);
-        }
+      // 固定引线之间的简单折线也必须完整保留首尾引线，不能直接连接框边锚点。
+      considerStateRoute([start, { x: end.x, y: start.y }, end]);
+      considerStateRoute([start, { x: start.x, y: end.y }, end]);
+      const lanes = (low, high) => [(low + high) / 2, Math.min(low, high) - STATE_PORT_LEAD,
+        Math.max(low, high) + STATE_PORT_LEAD];
+      for (const x of lanes(start.x, end.x)) {
+        considerStateRoute([start, { x, y: start.y }, { x, y: end.y }, end]);
       }
-      if (!candidates.length) {
-        const controls = simplifyPoints([start, ...edge.points.slice(1, -1), end]);
-        for (const horizontalFirst of [true, false]) {
-          const orthogonalized = [];
-          for (let i = 1; i < controls.length; i++) {
-            const from = controls[i - 1], to = controls[i];
-            if (near(from.x, to.x) || near(from.y, to.y)) { orthogonalized.push(to); continue; }
-            const corner = horizontalFirst ? { x: to.x, y: from.y } : { x: from.x, y: to.y };
-            orthogonalized.push(corner, to);
-          }
-          considerStateRoute(orthogonalized.slice(1, -1));
-        }
+      for (const y of lanes(start.y, end.y)) {
+        considerStateRoute([start, { x: start.x, y }, { x: end.x, y }, end]);
       }
       if (!candidates.length) {
         const lane = 24;
@@ -889,8 +774,36 @@ export function routeNativeEdges(svg, options = {}) {
           extraX.push(point.x - lane, point.x + lane);
           extraY.push(point.y - lane, point.y + lane);
         }
-        considerStateRoute(orthogonalRoute(start, end, barriers, CLEARANCE, occupied,
-          { ...directions, avoidSegments: occupied, extraX, extraY }));
+        considerStateRoute(search(start, end, barriers, CLEARANCE, occupied,
+          { ...directions, extraX, extraY }));
+      }
+      if (!candidates.length) {
+        const originalSides = [a.side, b.side];
+        const centered = (port, side) => onSide(port.node.box, side, horizontalSide(side)
+          ? (port.node.box.y + port.node.box.bottom) / 2 : (port.node.box.x + port.node.box.right) / 2);
+        const sides = ["top", "right", "bottom", "left"];
+        const choices = sides.flatMap(sourceSide => sides.map(targetSide => {
+          const p = centered(a, sourceSide), q = centered(b, targetSide);
+          return { sourceSide, targetSide, p, q, cost: distance(p, q)
+            + (sourceSide === originalSides[0] ? 0 : 80) + (targetSide === originalSides[1] ? 0 : 80) };
+        })).sort((left, right) => left.cost - right.cost);
+        for (const choice of choices) {
+          if (candidates.length) break;
+          const opposing = [...ports.values()].some(port => port.edge !== edge && (
+            !port.start && port.node === edge.source && port.side === choice.sourceSide
+            || port.start && port.node === edge.target && port.side === choice.targetSide));
+          if (opposing) continue;
+          a.side = choice.sourceSide; a.anchor = choice.p;
+          b.side = choice.targetSide; b.anchor = choice.q;
+          Object.assign(start, lead(a)); Object.assign(end, lead(b));
+          const extraX = occupied.flatMap(([p, q]) => [p.x - STATE_PORT_LEAD, p.x + STATE_PORT_LEAD,
+            q.x - STATE_PORT_LEAD, q.x + STATE_PORT_LEAD]);
+          const extraY = occupied.flatMap(([p, q]) => [p.y - STATE_PORT_LEAD, p.y + STATE_PORT_LEAD,
+            q.y - STATE_PORT_LEAD, q.y + STATE_PORT_LEAD]);
+          considerStateRoute(search(start, end, barriers, CLEARANCE, occupied, {
+            start: vector(a.anchor, start), end: vector(end, b.anchor), extraX, extraY, maxVisited: 5000,
+          }));
+        }
       }
       candidates.sort((left, right) => left.score - right.score);
       const bestState = candidates[0];
@@ -902,25 +815,16 @@ export function routeNativeEdges(svg, options = {}) {
           edge.element.setAttribute("data-gptm-label-x", String(bestState.reservation.x));
           edge.element.setAttribute("data-gptm-label-y", String(bestState.reservation.y));
         }
-      } else if (directAxis) {
-        const points = simplifyPoints([a.anchor, b.anchor]);
-        const crossesCommitted = points.slice(1).some((point, index) => occupied.some(([from, to]) => {
-          const hit = segmentIntersection(points[index], point, from, to);
-          return hit && hit.kind !== "touch";
-        }));
-        const outsidePort = (anchor, point, side) => horizontalSide(side)
-          ? side === "right" ? point.x > anchor.x + EPS : point.x < anchor.x - EPS
-          : side === "bottom" ? point.y > anchor.y + EPS : point.y < anchor.y - EPS;
-        if (!crossesCommitted && outsidePort(a.anchor, points[1], a.side)
-            && outsidePort(b.anchor, points.at(-2), b.side) && clearRoute(points, foreign)) {
-          writePoints(svg, edge.element, points);
-          edge.element.setAttribute("data-gptm-native-rerouted", "true");
-        }
       }
       // 寻路失败时宁可保留上游安全路径，也不能退回包含保护框的复杂搜索。
       const chosen = bestState ? readPoints(edge.element) : null;
       const retained = chosen?.map((p) => inSvg(svg, edge.element, p)) || edge.points;
-      for (let i = 1; i < retained.length; i++) occupied.push([retained[i - 1], retained[i]]);
+      edge.points = retained;
+      for (let i = 1; i < retained.length; i++) {
+        const segment = [retained[i - 1], retained[i]];
+        segment.edge = edge;
+        occupied.push(segment);
+      }
       continue;
     }
     const foreignShields = shields.filter((shield) => shield.edge !== edge);
@@ -983,10 +887,34 @@ export function routeNativeEdges(svg, options = {}) {
       edge.element.setAttribute("data-gptm-label-y", String(reservation.y));
     }
   }
+  const stateGroups = new Map();
+  for (const edge of edges.filter(e => e.state)) {
+    const storedMarker = edge.element.getAttribute("data-gptm-state-marker");
+    if (storedMarker) edge.element.setAttribute("marker-end", storedMarker);
+    else if (edge.element.hasAttribute("marker-end")) {
+      edge.element.setAttribute("data-gptm-state-marker", edge.element.getAttribute("marker-end"));
+    }
+    edge.element.removeAttribute("data-gptm-shared-tip");
+    edge.element.removeAttribute("data-gptm-shared-start");
+    for (const first of [true, false]) {
+      const p = first ? edge.points[0] : edge.points.at(-1);
+      const key = `${first}:${(first ? edge.source : edge.target).element.id}:${p.x.toFixed(3)},${p.y.toFixed(3)}`;
+      if (!stateGroups.has(key)) stateGroups.set(key, []);
+      stateGroups.get(key).push({ edge, first });
+    }
+  }
+  for (const group of stateGroups.values()) {
+    if (group.length < 2) continue;
+    const owner = group[0].edge.element.dataset.id;
+    for (const { edge, first } of group) {
+      edge.element.setAttribute(first ? "data-gptm-shared-start" : "data-gptm-shared-tip", owner);
+      if (!first && edge !== group[0].edge) edge.element.removeAttribute("marker-end");
+    }
+  }
   svg.setAttribute("data-gptm-native-routes", String(edges.filter((e) => e.element.hasAttribute("data-gptm-native-rerouted")).length));
   const failedStateEdges = edges.filter((edge) => edge.state && edge.compatible
     && edge.source !== edge.target && !edge.element.hasAttribute("data-gptm-native-rerouted"));
   if (!options.retry && failedStateEdges.length) {
-    return routeNativeEdges(svg, { retry: true, failed: new Set(failedStateEdges.map((edge) => edge.element.id)) });
+    return routeNativeEdges(svg, { retry: true });
   }
 }

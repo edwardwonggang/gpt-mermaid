@@ -241,7 +241,7 @@ function edgeSnapshot(svg, element, semanticNodes) {
   return { element, id: element.dataset.id || element.id, points,
     controls: readPoints(element)?.map((p) => { const q = mapPoint(p); return { x: q.x, y: q.y }; }),
     source, target,
-    shared: element.dataset.gptmSharedTip, box: boxOf(points) };
+    shared: element.dataset.gptmSharedTip, sharedStart: element.dataset.gptmSharedStart, box: boxOf(points) };
 }
 
 function semanticNodes(svg) {
@@ -311,6 +311,12 @@ function createRoutingContext(svg) {
 }
 
 function allowedJunction(a, b, hit) {
+  // 同向源端的公共前缀与目标端公共后缀使用同一条精确几何规则。
+  if (a.sharedStart && a.sharedStart === b.sharedStart && a.source && a.source === b.source) {
+    const reversed = edge => ({ ...edge, source: edge.target, target: edge.source,
+      points: edge.points.slice().reverse(), shared: edge.sharedStart, sharedStart: null });
+    if (allowedJunction(reversed(a), reversed(b), hit)) return true;
+  }
   if (a.shared && a.shared === b.shared && a.target && b.target && a.target === b.target) {
     // 精确分段的实际共享路径才可豁免；距离/角度阈值会吞掉邻近的浅角真实交叉。
     const commonSegments = [];

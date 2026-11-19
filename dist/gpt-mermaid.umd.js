@@ -680,7 +680,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
   var PORT_GAP = 18;
   var CLEARANCE = 10;
   var BEND_COST = 22;
-  var SHORT_LEG = 8;
+  var STATE_PORT_LEAD = 40;
   var near = (a, b) => Math.abs(a - b) < EPS2;
   var distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   function nodeShape(node) {
@@ -865,7 +865,10 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         const backwards = (v) => v && movement.x * v.x + movement.y * v.y < -EPS2;
         if (current.index === startIndex && backwards(directions.start) || index === endIndex && backwards(directions.end)) continue;
         const segmentKey = current.index < index ? `${current.index}:${index}` : `${index}:${current.index}`;
-        if (!visibility.has(segmentKey)) visibility.set(segmentKey, !segmentBlocked(a, b, boxes) && !(directions.avoidSegments || []).some(([p, q]) => segmentIntersection(a, b, p, q)));
+        if (!visibility.has(segmentKey)) visibility.set(segmentKey, !segmentBlocked(a, b, boxes) && !(directions.avoidSegments || []).some((segment) => {
+          const hit = segmentIntersection(a, b, segment[0], segment[1]);
+          return hit && !directions.allowJunction?.(hit, segment);
+        }));
         if (!visibility.get(segmentKey)) continue;
         let congestion = congestionCache.get(segmentKey);
         if (congestion === void 0) {
@@ -1127,7 +1130,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     return candidates.sort((a, b) => a.score - b.score)[0];
   }
   function routeNativeEdges(svg, options = {}) {
-    const nodes = new Map([...svg.querySelectorAll("g.node[data-id]")].map((element) => {
+    const nodes = new Map([...svg.querySelectorAll("g.node[data-id],g.statediagram-cluster[data-id]")].map((element) => {
       const shape = nodeShape(element);
       return [element.dataset.id, shape && { element, shape, box: boundsInSvg(svg, shape) }];
     }).filter(([, node]) => node));
@@ -1135,6 +1138,10 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     const edges = native.map((element) => {
       const source = nodes.get(element.dataset.source), target = nodes.get(element.dataset.target), raw = readPoints(element);
       if (!source || !target || !raw) return null;
+      if (element.classList?.contains("transition")) {
+        element.removeAttribute("data-gptm-label-x");
+        element.removeAttribute("data-gptm-label-y");
+      }
       element.setAttribute("data-gptm-source", source.element.id);
       element.setAttribute("data-gptm-target", target.element.id);
       const compatible = ["marker-start", "marker-end"].every((attribute) => {
@@ -1165,11 +1172,11 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       if (edge.source !== edge.target || !edge.compatible) continue;
       const label = loopLabels.get(edge.element.dataset.id), size = label ? boundsInSvg(svg, label) : { width: 0, height: 0 };
       const initial = sideOf(edge.points[0], edge.points[1]);
-      const obstacles = [...nodes.values()].filter((node) => node !== edge.source).map((node) => node.box);
+      const obstacles = [...nodes.values()].filter((node) => node !== edge.source && !node.element.contains(edge.source.element)).map((node) => node.box);
       for (const side of [initial, ...["right", "left", "bottom", "top"].filter((s) => s !== initial)]) {
         const laneKey = edge.source.element.id;
         const lane = loopLanes.get(laneKey) || 0;
-        const points = loopRoute(
+        let points = loopRoute(
           edge.source.box,
           side,
           size,
@@ -1177,6 +1184,17 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
           lane,
           loopCounts.get(laneKey) || 1
         );
+        if (edge.state) {
+          const box = edge.source.box, adjacent = { right: "top", top: "left", left: "bottom", bottom: "right" }[side];
+          const centerPort = (direction) => onSide(box, direction, horizontalSide(direction) ? (box.y + box.bottom) / 2 : (box.x + box.right) / 2);
+          const a = centerPort(side), b = centerPort(adjacent);
+          const reach = Math.max(STATE_PORT_LEAD, size.width + 24) + lane * STATE_PORT_LEAD;
+          const first = { ...a }, last = { ...b };
+          first[horizontalSide(side) ? "x" : "y"] += signOf(side) * reach;
+          last[horizontalSide(adjacent) ? "x" : "y"] += signOf(adjacent) * STATE_PORT_LEAD;
+          const corner = horizontalSide(side) ? { x: first.x, y: last.y } : { x: last.x, y: first.y };
+          points = [a, first, corner, last, b];
+        }
         if (!clearRoute(points, obstacles, 4)) continue;
         const center = { x: (points[1].x + points[2].x) / 2, y: (points[1].y + points[2].y) / 2 };
         const reservation = nativeLabelBox(center, size);
@@ -1208,7 +1226,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     }
     const changed = /* @__PURE__ */ new Set();
     for (const group of groups.values()) {
-      if (group.length < 2 || group.some((port) => !port.edge.compatible)) continue;
+      if (group.length < 2 || group.some((port) => port.edge.state || !port.edge.compatible)) continue;
       group.sort((a, b) => a.value - b.value);
       if (!group.some((port, i) => i && port.value - group[i - 1].value < PORT_GAP)) continue;
       const { node, side } = group[0], box = node.box, horizontal = horizontalSide(side);
@@ -1221,91 +1239,6 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         const previous = Number(port.edge.element.getAttribute("data-gptm-port-span")) || Infinity;
         port.edge.element.setAttribute("data-gptm-port-span", String(Math.min(previous, spacing)));
         changed.add(port.edge);
-      });
-    }
-    if (svg.classList?.contains("statediagram")) {
-      for (const group of groups.values()) {
-        if (group.length < 2 || horizontalSide(group[0].side)) continue;
-        const node = group[0].node;
-        if (group.every((port) => !port.start && signOf(port.side) * (port.edge.source.box.y + port.edge.source.box.height / 2 - node.box.y - node.box.height / 2) > 0)) continue;
-        for (const port of group) {
-          const other = port.start ? port.edge.target : port.edge.source;
-          const otherCenterX = other.box.x + other.box.width / 2;
-          if (otherCenterX >= node.box.x - 4 && otherCenterX <= node.box.right + 4) continue;
-          const side = otherCenterX < node.box.x ? "left" : "right";
-          port.side = side;
-          port.anchor = onSide(node.box, side, node.box.y + node.box.height / 2);
-          port.value = port.anchor.y;
-        }
-      }
-      const sides = /* @__PURE__ */ new Map();
-      for (const port of ports.values()) {
-        if (!port.edge.compatible) continue;
-        const key = `${port.node.element.id}\0${port.side}`;
-        if (!sides.has(key)) sides.set(key, []);
-        sides.get(key).push(port);
-      }
-      for (const group of sides.values()) {
-        if (group.length < 2) continue;
-        group.sort((a, b) => a.value - b.value);
-        if (!group.some((port, index) => index && port.value - group[index - 1].value < PORT_GAP)) continue;
-        const node = group[0].node, horizontal = horizontalSide(group[0].side);
-        const low = horizontal ? node.box.y : node.box.x;
-        const span = horizontal ? node.box.height : node.box.width;
-        const margin = Math.min(12, span * 0.2);
-        const spacing = Math.min(24, (span - margin * 2) / (group.length - 1));
-        group.forEach((port, index) => {
-          const value = low + span / 2 + (index - (group.length - 1) / 2) * spacing;
-          port.anchor = onSide(node.box, port.side, value);
-          port.value = value;
-        });
-      }
-    }
-    for (const node of svg.classList?.contains("statediagram") ? nodes.values() : []) {
-      if (node.box.width > 24 || node.box.height > 24) continue;
-      const radial = [...ports.values()].filter((port) => port.node === node && port.edge.compatible);
-      if (radial.length < 2) continue;
-      const center = { x: node.box.x + node.box.width / 2, y: node.box.y + node.box.height / 2 };
-      const radiusX = node.box.width / 2, radiusY = node.box.height / 2;
-      radial.sort((a, b) => Math.atan2(a.anchor.y - center.y, a.anchor.x - center.x) - Math.atan2(b.anchor.y - center.y, b.anchor.x - center.x));
-      const usedSides = /* @__PURE__ */ new Set();
-      const sideVector = { top: [0, -1], right: [1, 0], bottom: [0, 1], left: [-1, 0] };
-      const centers = new Map(radial.map((port) => {
-        const other = port.start ? port.edge.target : port.edge.source;
-        return [port, {
-          x: other.box.x + other.box.width / 2 - center.x,
-          y: other.box.y + other.box.height / 2 - center.y
-        }];
-      }));
-      const oneSided = radial.length === 3 && [...centers.values()].every((delta2) => delta2.y < 0) ? ["left", "top", "right"] : radial.length === 3 && [...centers.values()].every((delta2) => delta2.y > 0) ? ["left", "bottom", "right"] : null;
-      const ordered = oneSided ? radial.slice().sort((a, b) => centers.get(a).x - centers.get(b).x) : radial;
-      ordered.forEach((port, index) => {
-        let side, x, y;
-        if (oneSided) {
-          side = oneSided[index];
-          ({ x, y } = onSide(node.box, side, horizontalSide(side) ? center.y : center.x));
-        } else if (radial.length <= 4) {
-          const { x: dx, y: dy } = centers.get(port);
-          const desired = Math.abs(dx) > Math.abs(dy) ? dx > 0 ? "right" : "left" : dy > 0 ? "bottom" : "top";
-          const available = ["top", "right", "bottom", "left"].filter((candidate) => !usedSides.has(candidate));
-          side = available.includes(desired) ? desired : available.sort((left, right) => {
-            const score = (candidate) => {
-              const [vx, vy] = sideVector[candidate];
-              return -((dx * vx + dy * vy) / Math.max(1, Math.hypot(dx, dy)));
-            };
-            return score(left) - score(right);
-          })[0];
-          usedSides.add(side);
-          ({ x, y } = onSide(node.box, side, horizontalSide(side) ? center.y : center.x));
-        } else {
-          const angle = -Math.PI / 2 + index * Math.PI * 2 / radial.length;
-          x = center.x + Math.cos(angle) * radiusX;
-          y = center.y + Math.sin(angle) * radiusY;
-          side = Math.abs(Math.cos(angle)) > Math.abs(Math.sin(angle)) ? Math.cos(angle) > 0 ? "right" : "left" : Math.sin(angle) > 0 ? "bottom" : "top";
-        }
-        port.anchor = { x, y };
-        port.side = side;
-        port.value = horizontalSide(port.side) ? y : x;
       });
     }
     const boxes = [...nodes.values()].map((node) => node.box), occupied = [];
@@ -1348,94 +1281,50 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       const label = labelById.get(edge.element.dataset.id);
       return [edge, label?.textContent.trim() ? boundsInSvg(svg, label) : null];
     }));
-    const reversePairs = /* @__PURE__ */ new Map();
-    for (const edge of edges) {
-      if (!edge.state || !edge.compatible || edge.source === edge.target) continue;
-      const key = [edge.source.element.id, edge.target.element.id].sort().join("\0");
-      const pair = reversePairs.get(key) || [];
-      pair.push(edge);
-      reversePairs.set(key, pair);
+    for (const node of nodes.values()) {
+      const statePorts = [...ports.values()].filter((p) => p.node === node && p.edge.state && p.edge.compatible && p.edge.source !== p.edge.target);
+      const incoming = new Set(statePorts.filter((p) => !p.start).map((p) => p.side));
+      for (const port of statePorts.filter((p) => p.start && incoming.has(p.side))) {
+        const other = port.edge.target.box;
+        const choices = ["top", "bottom", "left", "right"].filter((side) => !incoming.has(side));
+        const cost = (side) => {
+          const anchor = onSide(node.box, side, horizontalSide(side) ? (node.box.y + node.box.bottom) / 2 : (node.box.x + node.box.right) / 2);
+          const axis = horizontalSide(side) ? "x" : "y";
+          anchor[axis] += signOf(side) * STATE_PORT_LEAD;
+          return Math.abs(anchor.x - (other.x + other.right) / 2) + Math.abs(anchor.y - (other.y + other.bottom) / 2);
+        };
+        choices.sort((a, b) => cost(a) - cost(b));
+        if (choices.length) port.side = choices[0];
+      }
+      for (const port of statePorts) {
+        port.anchor = onSide(node.box, port.side, horizontalSide(port.side) ? (node.box.y + node.box.bottom) / 2 : (node.box.x + node.box.right) / 2);
+        port.value = port.anchor[horizontalSide(port.side) ? "y" : "x"];
+      }
     }
-    for (const pair of reversePairs.values()) {
-      if (pair.length !== 2 || pair[0].source !== pair[1].target || pair[0].target !== pair[1].source) continue;
-      const [first, second] = pair;
-      const adjust = (leftPort, rightPort) => {
-        if (!leftPort || !rightPort || leftPort.side !== rightPort.side) return;
-        const box = leftPort.node.box, horizontal = horizontalSide(leftPort.side);
-        const cross2 = horizontal ? box.y : box.x;
-        const span = horizontal ? box.height : box.width;
-        const low = cross2 + 2, high = cross2 + span - 2;
-        const firstWidth = labelSizes.get(first)?.width || labelSizes.get(first)?.height || 0;
-        const secondWidth = labelSizes.get(second)?.width || labelSizes.get(second)?.height || 0;
-        const gap = Math.min(high - low, Math.max(PORT_GAP, (firstWidth + secondWidth) / 2 + 10));
-        const center = cross2 + span / 2;
-        leftPort.anchor[horizontal ? "y" : "x"] = Math.max(low, Math.min(high, center - gap / 2));
-        rightPort.anchor[horizontal ? "y" : "x"] = Math.max(low, Math.min(high, center + gap / 2));
-        leftPort.value = leftPort.anchor[horizontal ? "y" : "x"];
-        rightPort.value = rightPort.anchor[horizontal ? "y" : "x"];
+    const stateApproaches = [...ports.values()].filter((port) => port.edge.state && port.edge.source !== port.edge.target).map((port) => {
+      const horizontal = horizontalSide(port.side), p = port.anchor, out = signOf(port.side) * STATE_PORT_LEAD;
+      return {
+        x: horizontal ? Math.min(p.x, p.x + out) : p.x - 3,
+        right: horizontal ? Math.max(p.x, p.x + out) : p.x + 3,
+        y: horizontal ? p.y - 3 : Math.min(p.y, p.y + out),
+        bottom: horizontal ? p.y + 3 : Math.max(p.y, p.y + out)
       };
-      adjust(ports.get(`${first.element.id}:true`), ports.get(`${second.element.id}:false`));
-      adjust(ports.get(`${first.element.id}:false`), ports.get(`${second.element.id}:true`));
-    }
+    });
     const routingOrder = edges.filter((edge) => edge.compatible).sort((a, b) => {
       if (a.state !== b.state) return a.state ? -1 : 1;
       if (a.state) {
-        if (options.retry) {
-          const failedA = options.failed?.has(a.element.id) ? 1 : 0;
-          const failedB = options.failed?.has(b.element.id) ? 1 : 0;
-          if (failedA !== failedB) return failedA - failedB;
-        }
-        const tinyRank = (edge) => {
-          const port = ports.get(`${edge.element.id}:false`);
-          return edge.target.box.width <= 24 && edge.target.box.height <= 24 && port && horizontalSide(port.side) ? 0 : 1;
-        };
-        if (tinyRank(a) !== tinyRank(b)) return tinyRank(a) - tinyRank(b);
-        if (a.source.element.id === b.target.element.id) return -1;
-        if (b.source.element.id === a.target.element.id) return 1;
-        if (options.retry) {
-          const sourceY = (edge) => ports.get(`${edge.element.id}:true`)?.anchor.y || 0;
-          return sourceY(b) - sourceY(a);
-        }
         return 0;
       }
       return (labelSizes.get(b)?.width || 0) - (labelSizes.get(a)?.width || 0);
     });
     for (const edge of routingOrder) {
       if (edge.source === edge.target) continue;
-      const foreign = [...nodes.values()].filter((node) => node !== edge.source && node !== edge.target).map((node) => node.box);
+      const scopedNodes = [...nodes.values()].filter((node) => node === edge.source || node === edge.target || !node.element.contains(edge.source.element) && !node.element.contains(edge.target.element));
+      const foreign = scopedNodes.filter((node) => node !== edge.source && node !== edge.target).map((node) => node.box);
       const a = ports.get(`${edge.element.id}:true`), b = ports.get(`${edge.element.id}:false`);
-      const retrying = edge.state && options.retry && options.failed?.has(edge.element.id);
-      if (retrying) {
-        const opposite = { left: "right", right: "left", top: "bottom", bottom: "top" }[b.side];
-        b.side = opposite;
-        b.anchor = onSide(
-          b.node.box,
-          opposite,
-          horizontalSide(opposite) ? b.node.box.y + b.node.box.height / 2 : b.node.box.x + b.node.box.width / 2
-        );
-        b.value = horizontalSide(opposite) ? b.anchor.y : b.anchor.x;
-      }
-      let directAxis = "";
-      if (edge.state) {
-        const dx = Math.abs(a.anchor.x - b.anchor.x), dy = Math.abs(a.anchor.y - b.anchor.y);
-        const axis = dx < SHORT_LEG * 1.5 && dy > dx * 2 ? "x" : dy < SHORT_LEG * 1.5 && dx > dy * 2 ? "y" : "";
-        directAxis = axis;
-        if (axis) {
-          const low = Math.max(a.node.box[axis] + 2, b.node.box[axis] + 2);
-          const high = Math.min(
-            a.node.box[axis === "x" ? "right" : "bottom"] - 2,
-            b.node.box[axis === "x" ? "right" : "bottom"] - 2
-          );
-          if (low <= high) {
-            const common = Math.max(low, Math.min(high, (a.anchor[axis] + b.anchor[axis]) / 2));
-            a.anchor[axis] = common;
-            b.anchor[axis] = common;
-          }
-        }
-      }
       const lead = (port) => {
         const point = { ...port.anchor }, axis = horizontalSide(port.side) ? "x" : "y";
-        point[axis] += signOf(port.side) * 24;
+        point[axis] += signOf(port.side) * (edge.state ? STATE_PORT_LEAD : 24);
         return point;
       };
       const start = lead(a), end = lead(b);
@@ -1443,18 +1332,13 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       const directions = { start: vector2(a.anchor, start), end: vector2(end, b.anchor) };
       if (edge.state) {
         const size2 = labelSizes.get(edge);
-        const barriers2 = [...retrying ? boxes : foreign, ...reservedLabels];
-        const labelBarriers2 = [...boxes, ...reservedLabels];
+        const barriers2 = [...scopedNodes.map((node) => node.box), ...reservedLabels];
+        const labelBarriers2 = [...scopedNodes.map((node) => node.box), ...stateApproaches, ...reservedLabels];
         const candidates = [];
         const considerStateRoute = (route) => {
           const raw = route && [a.anchor, ...route, b.anchor];
           if (!raw) return;
-          const snapped = raw.map((point) => {
-            const x = Math.abs(point.x - a.anchor.x) < SHORT_LEG ? a.anchor.x : Math.abs(point.x - b.anchor.x) < SHORT_LEG ? b.anchor.x : point.x;
-            const y = Math.abs(point.y - a.anchor.y) < SHORT_LEG ? a.anchor.y : Math.abs(point.y - b.anchor.y) < SHORT_LEG ? b.anchor.y : point.y;
-            return { x, y };
-          });
-          for (const points2 of [simplifyPoints(snapped), simplifyPoints(raw)]) {
+          for (const points2 of [simplifyPoints(raw)]) {
             const quality = routeQuality(points2);
             const crossesEndpoint = (node, skip) => points2.slice(1).some((point, index) => index !== skip && segmentBlocked(points2[index], point, [node.box], -1));
             const outsidePort = (anchor, point, side) => {
@@ -1465,19 +1349,53 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
             if (!points2.slice(1).every((point, index) => near(point.x, points2[index].x) || near(point.y, points2[index].y))) continue;
             if (!outsidePort(a.anchor, points2[1], a.side) || !outsidePort(b.anchor, points2.at(-2), b.side)) continue;
             if (crossesEndpoint(edge.source, 0) || crossesEndpoint(edge.target, points2.length - 2)) continue;
-            if (points2.slice(1).some((point, index) => distance(points2[index], point) < SHORT_LEG)) continue;
-            const committedHits = points2.slice(1).flatMap((point, index) => occupied.map(([from, to]) => {
+            if (distance(points2[0], points2[1]) < STATE_PORT_LEAD - EPS2 || distance(points2.at(-1), points2.at(-2)) < STATE_PORT_LEAD - EPS2) continue;
+            if (points2.slice(1).some((point, index) => distance(points2[index], point) < 12 - EPS2)) continue;
+            const committedHits = points2.slice(1).flatMap((point, index) => occupied.map((segment) => {
+              const [from, to] = segment;
               const hit = segmentIntersection(points2[index], point, from, to);
-              return hit && hit.kind !== "touch" ? hit : null;
+              return hit && hit.kind !== "touch" && !sharedTerminal(segment.edge, points2, hit) ? hit : null;
             }).filter(Boolean));
-            const tinyTarget = edge.target.box.width <= 24 && edge.target.box.height <= 24;
-            const nearTinyPort = tinyTarget && committedHits.every((hit) => distance(hit, b.anchor) <= 28);
-            if (committedHits.length && !nearTinyPort) continue;
+            if (committedHits.length) continue;
             const reservation2 = size2 && labelOnRoute(svg, points2, size2, labelBarriers2, occupied);
             const reservationPenalty = size2 && !reservation2 ? 1e6 : 0;
-            candidates.push({ points: points2, reservation: reservation2, score: quality.score + (reservation2?.score || 0) * 0.02 + reservationPenalty });
+            candidates.push({
+              points: points2,
+              reservation: reservation2,
+              score: quality.score + (reservation2?.score || 0) * 0.02 + reservationPenalty
+            });
             break;
           }
+        };
+        const sharedTerminal = (other, points2, hit) => {
+          if (!other) return false;
+          return [true, false].some((start2) => {
+            if ((start2 ? edge.source : edge.target) !== (start2 ? other.source : other.target)) return false;
+            const own = start2 ? points2 : points2.slice().reverse();
+            const theirs = start2 ? other.points : other.points.slice().reverse();
+            if (distance(own[0], theirs[0]) > EPS2) return false;
+            const shared = segmentIntersection(own[0], own[1], theirs[0], theirs[1]);
+            if (shared?.kind !== "overlap") return false;
+            const axis = Math.abs(own[1].x - own[0].x) > EPS2 ? "x" : "y", cross2 = axis === "x" ? "y" : "x";
+            return Math.abs(hit[cross2] - own[0][cross2]) < EPS2 && hit[axis] >= Math.max(Math.min(own[0][axis], own[1][axis]), Math.min(theirs[0][axis], theirs[1][axis])) - EPS2 && hit[axis] <= Math.min(Math.max(own[0][axis], own[1][axis]), Math.max(theirs[0][axis], theirs[1][axis])) + EPS2;
+          });
+        };
+        const stateWalls = () => occupied.filter((segment) => {
+          const other = segment.edge;
+          if (!other) return true;
+          return ![true, false].some((first) => {
+            if ((first ? edge.source : edge.target) !== (first ? other.source : other.target)) return false;
+            const port = first ? a : b, q = first ? other.points : other.points.slice().reverse();
+            return distance(port.anchor, q[0]) < EPS2 && segmentIntersection(segment[0], segment[1], q[0], q[1])?.kind === "overlap";
+          });
+        });
+        const search = (from, to, obstacles, clearance, congestion, dir) => {
+          const walls = stateWalls(), result = orthogonalRoute(from, to, obstacles, clearance, congestion, {
+            ...dir,
+            avoidSegments: walls,
+            allowJunction: (hit, segment) => hit.kind === "touch" && sharedTerminal(segment.edge, [a.anchor, start, end, b.anchor], hit)
+          });
+          return result;
         };
         if (size2) {
           const center = { x: size2.x + size2.width / 2, y: size2.y + size2.height / 2 };
@@ -1485,92 +1403,47 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
             const enter = horizontal ? { x: center.x - 8, y: center.y } : { x: center.x, y: center.y - 8 };
             const exit = horizontal ? { x: center.x + 8, y: center.y } : { x: center.x, y: center.y + 8 };
             const through = vector2(enter, exit);
-            const before = orthogonalRoute(
+            const before = search(
               start,
               enter,
               barriers2,
               CLEARANCE,
               occupied,
-              { ...directions, end: through, avoidSegments: occupied }
+              { ...directions, end: through }
             );
-            const after = orthogonalRoute(
+            const after = search(
               exit,
               end,
               barriers2,
               CLEARANCE,
               occupied,
-              { start: through, end: directions.end, avoidSegments: occupied }
+              { start: through, end: directions.end }
             );
             if (before && after) considerStateRoute([...before, ...after]);
           }
         }
-        considerStateRoute(orthogonalRoute(
-          start,
-          end,
-          barriers2,
-          CLEARANCE,
-          occupied,
-          { ...directions, avoidSegments: occupied }
-        ));
+        considerStateRoute(search(start, end, barriers2, CLEARANCE, occupied, directions));
         if (size2 && !candidates.some((candidate) => candidate.reservation)) {
           const gapX = Math.max(30, size2.width / 2 + 12), gapY = Math.max(30, size2.height / 2 + 12);
           const extra = {
             ...directions,
-            avoidSegments: occupied,
             extraX: [a.anchor.x - gapX, a.anchor.x + gapX, b.anchor.x - gapX, b.anchor.x + gapX],
             extraY: [a.anchor.y - gapY, a.anchor.y + gapY, b.anchor.y - gapY, b.anchor.y + gapY]
           };
-          considerStateRoute(orthogonalRoute(start, end, barriers2, CLEARANCE, occupied, extra));
-          if (!candidates.some((candidate) => candidate.reservation)) {
-            considerStateRoute(orthogonalRoute(
-              start,
-              end,
-              barriers2,
-              CLEARANCE,
-              occupied,
-              { ...extra, avoidSegments: void 0 }
-            ));
-          }
+          considerStateRoute(search(start, end, barriers2, CLEARANCE, occupied, extra));
         }
-        if (!candidates.some((candidate) => candidate.reservation)) {
-          const around = (low, high) => {
-            const span = high - low;
-            return [low + span / 2, low + span / 3, low + span * 2 / 3, low - 30, high + 30];
-          };
-          if (!horizontalSide(a.side) && !horizontalSide(b.side)) {
-            for (const y of around(Math.min(a.anchor.y, b.anchor.y), Math.max(a.anchor.y, b.anchor.y))) {
-              considerStateRoute([{ x: a.anchor.x, y }, { x: b.anchor.x, y }]);
-            }
-          } else if (horizontalSide(a.side) && horizontalSide(b.side)) {
-            for (const x of around(Math.min(a.anchor.x, b.anchor.x), Math.max(a.anchor.x, b.anchor.x))) {
-              considerStateRoute([{ x, y: a.anchor.y }, { x, y: b.anchor.y }]);
-            }
-          } else {
-            for (const y of around(Math.min(a.anchor.y, b.anchor.y), Math.max(a.anchor.y, b.anchor.y))) {
-              considerStateRoute([{ x: a.anchor.x, y }, { x: b.anchor.x, y }]);
-            }
-            for (const x of around(Math.min(a.anchor.x, b.anchor.x), Math.max(a.anchor.x, b.anchor.x))) {
-              considerStateRoute([{ x, y: a.anchor.y }, { x, y: b.anchor.y }]);
-            }
-            considerStateRoute([{ x: b.anchor.x, y: a.anchor.y }]);
-            considerStateRoute([{ x: a.anchor.x, y: b.anchor.y }]);
-          }
+        considerStateRoute([start, { x: end.x, y: start.y }, end]);
+        considerStateRoute([start, { x: start.x, y: end.y }, end]);
+        const lanes = (low, high) => [
+          (low + high) / 2,
+          Math.min(low, high) - STATE_PORT_LEAD,
+          Math.max(low, high) + STATE_PORT_LEAD
+        ];
+        for (const x of lanes(start.x, end.x)) {
+          considerStateRoute([start, { x, y: start.y }, { x, y: end.y }, end]);
         }
-        if (!candidates.length) {
-          const controls = simplifyPoints([start, ...edge.points.slice(1, -1), end]);
-          for (const horizontalFirst of [true, false]) {
-            const orthogonalized = [];
-            for (let i = 1; i < controls.length; i++) {
-              const from = controls[i - 1], to = controls[i];
-              if (near(from.x, to.x) || near(from.y, to.y)) {
-                orthogonalized.push(to);
-                continue;
-              }
-              const corner = horizontalFirst ? { x: to.x, y: from.y } : { x: from.x, y: to.y };
-              orthogonalized.push(corner, to);
-            }
-            considerStateRoute(orthogonalized.slice(1, -1));
-          }
+        for (const y of lanes(start.y, end.y)) {
+          considerStateRoute([start, { x: start.x, y }, { x: end.x, y }, end]);
         }
         if (!candidates.length) {
           const lane = 24;
@@ -1584,14 +1457,53 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
             extraX.push(point.x - lane, point.x + lane);
             extraY.push(point.y - lane, point.y + lane);
           }
-          considerStateRoute(orthogonalRoute(
+          considerStateRoute(search(
             start,
             end,
             barriers2,
             CLEARANCE,
             occupied,
-            { ...directions, avoidSegments: occupied, extraX, extraY }
+            { ...directions, extraX, extraY }
           ));
+        }
+        if (!candidates.length) {
+          const originalSides = [a.side, b.side];
+          const centered = (port, side) => onSide(port.node.box, side, horizontalSide(side) ? (port.node.box.y + port.node.box.bottom) / 2 : (port.node.box.x + port.node.box.right) / 2);
+          const sides = ["top", "right", "bottom", "left"];
+          const choices = sides.flatMap((sourceSide) => sides.map((targetSide) => {
+            const p = centered(a, sourceSide), q = centered(b, targetSide);
+            return { sourceSide, targetSide, p, q, cost: distance(p, q) + (sourceSide === originalSides[0] ? 0 : 80) + (targetSide === originalSides[1] ? 0 : 80) };
+          })).sort((left, right) => left.cost - right.cost);
+          for (const choice of choices) {
+            if (candidates.length) break;
+            const opposing = [...ports.values()].some((port) => port.edge !== edge && (!port.start && port.node === edge.source && port.side === choice.sourceSide || port.start && port.node === edge.target && port.side === choice.targetSide));
+            if (opposing) continue;
+            a.side = choice.sourceSide;
+            a.anchor = choice.p;
+            b.side = choice.targetSide;
+            b.anchor = choice.q;
+            Object.assign(start, lead(a));
+            Object.assign(end, lead(b));
+            const extraX = occupied.flatMap(([p, q]) => [
+              p.x - STATE_PORT_LEAD,
+              p.x + STATE_PORT_LEAD,
+              q.x - STATE_PORT_LEAD,
+              q.x + STATE_PORT_LEAD
+            ]);
+            const extraY = occupied.flatMap(([p, q]) => [
+              p.y - STATE_PORT_LEAD,
+              p.y + STATE_PORT_LEAD,
+              q.y - STATE_PORT_LEAD,
+              q.y + STATE_PORT_LEAD
+            ]);
+            considerStateRoute(search(start, end, barriers2, CLEARANCE, occupied, {
+              start: vector2(a.anchor, start),
+              end: vector2(end, b.anchor),
+              extraX,
+              extraY,
+              maxVisited: 5e3
+            }));
+          }
         }
         candidates.sort((left, right) => left.score - right.score);
         const bestState = candidates[0];
@@ -1603,21 +1515,15 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
             edge.element.setAttribute("data-gptm-label-x", String(bestState.reservation.x));
             edge.element.setAttribute("data-gptm-label-y", String(bestState.reservation.y));
           }
-        } else if (directAxis) {
-          const points2 = simplifyPoints([a.anchor, b.anchor]);
-          const crossesCommitted = points2.slice(1).some((point, index) => occupied.some(([from, to]) => {
-            const hit = segmentIntersection(points2[index], point, from, to);
-            return hit && hit.kind !== "touch";
-          }));
-          const outsidePort = (anchor, point, side) => horizontalSide(side) ? side === "right" ? point.x > anchor.x + EPS2 : point.x < anchor.x - EPS2 : side === "bottom" ? point.y > anchor.y + EPS2 : point.y < anchor.y - EPS2;
-          if (!crossesCommitted && outsidePort(a.anchor, points2[1], a.side) && outsidePort(b.anchor, points2.at(-2), b.side) && clearRoute(points2, foreign)) {
-            writePoints(svg, edge.element, points2);
-            edge.element.setAttribute("data-gptm-native-rerouted", "true");
-          }
         }
         const chosen = bestState ? readPoints(edge.element) : null;
         const retained = chosen?.map((p) => inSvg(svg, edge.element, p)) || edge.points;
-        for (let i = 1; i < retained.length; i++) occupied.push([retained[i - 1], retained[i]]);
+        edge.points = retained;
+        for (let i = 1; i < retained.length; i++) {
+          const segment = [retained[i - 1], retained[i]];
+          segment.edge = edge;
+          occupied.push(segment);
+        }
         continue;
       }
       const foreignShields = shields.filter((shield) => shield.edge !== edge);
@@ -1673,10 +1579,34 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
         edge.element.setAttribute("data-gptm-label-y", String(reservation.y));
       }
     }
+    const stateGroups = /* @__PURE__ */ new Map();
+    for (const edge of edges.filter((e) => e.state)) {
+      const storedMarker = edge.element.getAttribute("data-gptm-state-marker");
+      if (storedMarker) edge.element.setAttribute("marker-end", storedMarker);
+      else if (edge.element.hasAttribute("marker-end")) {
+        edge.element.setAttribute("data-gptm-state-marker", edge.element.getAttribute("marker-end"));
+      }
+      edge.element.removeAttribute("data-gptm-shared-tip");
+      edge.element.removeAttribute("data-gptm-shared-start");
+      for (const first of [true, false]) {
+        const p = first ? edge.points[0] : edge.points.at(-1);
+        const key = `${first}:${(first ? edge.source : edge.target).element.id}:${p.x.toFixed(3)},${p.y.toFixed(3)}`;
+        if (!stateGroups.has(key)) stateGroups.set(key, []);
+        stateGroups.get(key).push({ edge, first });
+      }
+    }
+    for (const group of stateGroups.values()) {
+      if (group.length < 2) continue;
+      const owner = group[0].edge.element.dataset.id;
+      for (const { edge, first } of group) {
+        edge.element.setAttribute(first ? "data-gptm-shared-start" : "data-gptm-shared-tip", owner);
+        if (!first && edge !== group[0].edge) edge.element.removeAttribute("marker-end");
+      }
+    }
     svg.setAttribute("data-gptm-native-routes", String(edges.filter((e) => e.element.hasAttribute("data-gptm-native-rerouted")).length));
     const failedStateEdges = edges.filter((edge) => edge.state && edge.compatible && edge.source !== edge.target && !edge.element.hasAttribute("data-gptm-native-rerouted"));
     if (!options.retry && failedStateEdges.length) {
-      return routeNativeEdges(svg, { retry: true, failed: new Set(failedStateEdges.map((edge) => edge.element.id)) });
+      return routeNativeEdges(svg, { retry: true });
     }
   }
 
@@ -3248,6 +3178,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
       source,
       target,
       shared: element.dataset.gptmSharedTip,
+      sharedStart: element.dataset.gptmSharedStart,
       box: boxOf(points)
     };
   }
@@ -3314,6 +3245,17 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     };
   }
   function allowedJunction(a, b, hit) {
+    if (a.sharedStart && a.sharedStart === b.sharedStart && a.source && a.source === b.source) {
+      const reversed = (edge) => ({
+        ...edge,
+        source: edge.target,
+        target: edge.source,
+        points: edge.points.slice().reverse(),
+        shared: edge.sharedStart,
+        sharedStart: null
+      });
+      if (allowedJunction(reversed(a), reversed(b), hit)) return true;
+    }
     if (a.shared && a.shared === b.shared && a.target && b.target && a.target === b.target) {
       const commonSegments = [];
       let i = a.points.length - 1, j = b.points.length - 1, end = a.points[i];
@@ -4323,7 +4265,7 @@ g.classGroup rect, g.classGroup line { fill: ${vars.flowchartNodeColor}; stroke:
     }
   }
   function nodeOutlines(svg) {
-    return [...svg.querySelectorAll("g.node, g.cluster")].map((node) => {
+    return [...svg.querySelectorAll("g.node, g.cluster, g.statediagram-cluster")].map((node) => {
       const container = nodeShape(node);
       if (!container) return null;
       const shape = container instanceof SVGGeometryElement ? container : container.querySelector("path,rect,polygon,circle,ellipse");

@@ -15,6 +15,7 @@ import { auditArrowContacts } from "./arrow-contacts.mjs";
 import { verifyPracticalVariants } from "./practical-variants.mjs";
 import { verifyTouchGestures } from "./touch-gestures.mjs";
 import { BASE_GEOMETRY_EXPECTATIONS } from "./geometry-expectations.mjs";
+import { inspectStatePorts } from "./state-ports.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.GPT_MERMAID_TEST_PORT || 4173);
@@ -247,6 +248,7 @@ DONE --> DISABLED: 使能置 0`;
       safeSvg,
       stateGeometry,
       stateRouting,
+      stateSvg: stateResult.svg,
     };
   });
   assert(programmatic.width > 0 && programmatic.height > 0);
@@ -261,6 +263,14 @@ DONE --> DISABLED: 使能置 0`;
   assert.equal(programmatic.stateGeometry.borderWidth, "1.5px");
   assert.equal(programmatic.stateRouting.edges.length, 10, JSON.stringify(programmatic.stateRouting));
   assert.equal(programmatic.stateRouting.nativeRoutes, 10, JSON.stringify(programmatic.stateRouting));
+  const centeredPorts = await page.evaluate(inspectStatePorts, programmatic.stateSvg);
+  assert.equal(centeredPorts.length, 10);
+  for (const edge of centeredPorts) for (const port of edge.endpoints) {
+    assert(port.middleError < 0.1 && port.contourGap < 1, `端口必须在声明框的边中点：${JSON.stringify({ edge, port })}`);
+    assert(port.controlLead >= 40 - 0.05 && port.normalError < 0.1,
+      `框外必须保留32单位可见直线后再转弯：${JSON.stringify({ edge, port })}`);
+  }
+  await fs.writeFile(path.join(output, "centered-ports-report.json"), JSON.stringify(centeredPorts, null, 2));
   assert.equal(programmatic.stateRouting.status, "clear", JSON.stringify(programmatic.stateRouting));
   assert.equal(programmatic.stateRouting.crossings, 0, JSON.stringify(programmatic.stateRouting));
   const enabledEdge = programmatic.stateRouting.edges.find(edge =>
@@ -433,6 +443,28 @@ Charge --> Pack[Pack order] --> Ship[Ship parcel] --> Deliver[Confirm delivery] 
   assert(practical.fold.original.height < practical.fold.adaptive.height,
     `折返后应增加纵向高度：${JSON.stringify(practical.fold)}`);
   await verifyLayoutQuality(page, path.join(output, "playwright", "layout-after"));
+  const stateGallery = await page.evaluate(() => [...GPTMermaid.ui.uiState(document).records]
+    .filter(r => r.result?.svg.includes('class="statediagram"'))
+    .map(r => ({ id: r.figure.closest(".sample").dataset.sampleId, svg: r.result.svg })));
+  const expectedStateEdges = { state: 6, "stress-state-composite": 11, "stress-state-parallel": 9,
+    "stress-state-choice": 8, "stress-state-fork-join": 9, "stress-state-notes": 5, "stress-state-long": 19 };
+  assert.equal(stateGallery.length, 7, "状态图不能被选择器漏掉");
+  const stateGalleryPorts = [];
+  for (const sample of stateGallery) {
+    const ports = await page.evaluate(inspectStatePorts, sample.svg);
+    assert.equal(ports.length, expectedStateEdges[sample.id], sample.id);
+    for (const edge of ports) {
+      assert(edge.sharedArrowValid, `共享箭头与实际末段不一致：${sample.id} ${edge.id}`);
+      for (const port of edge.endpoints) {
+        assert(port.middleError < .1 && port.contourGap < 1.2,
+          `状态图端口偏离中点：${sample.id} ${JSON.stringify({edge,port})}`);
+        assert(port.controlLead >= 39.9 && port.normalError < .1,
+          `状态图首尾直线不足：${sample.id} ${JSON.stringify({edge,port})}`);
+      }
+    }
+    stateGalleryPorts.push({id:sample.id,ports});
+  }
+  await fs.writeFile(path.join(output, "state-gallery-ports.json"), JSON.stringify(stateGalleryPorts, null, 2));
   const details = await auditDetailOverlaps(page, path.join(output, "playwright", "detail-audit"), true, BASE_GEOMETRY_EXPECTATIONS);
   const crossingReport = await verifyCrossingQuality(page, path.join(output, "playwright", "route-quality"));
   const contacts = await auditArrowContacts(page, path.join(output, "playwright", "arrow-detail"), true, BASE_GEOMETRY_EXPECTATIONS);

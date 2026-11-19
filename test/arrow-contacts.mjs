@@ -64,7 +64,11 @@ export async function auditArrowContacts(page, output, enforce = true, expectati
           const owner = svg.getElementById(edge.getAttribute(start ? "data-gptm-source" : "data-gptm-target"));
           let attached = null;
           if (owner) {
-            const candidates = painted.filter((p) => p.shape.closest("g.node") === owner);
+            // 复合状态的外框属于 statediagram-cluster，自身不是 g.node；
+            // 只取该 owner 的直接轮廓，不能拿其中任一子状态冒充贴合。
+            const candidates = owner.classList.contains("statediagram-cluster")
+              ? [...owner.querySelectorAll(":scope > rect")].map(shape => ({ shape }))
+              : painted.filter((p) => p.shape.closest("g.node") === owner);
             const inside = { x: tip.x + v.x * 1.5, y: tip.y + v.y * 1.5 };
             attached = candidates.some(({ shape }) => shape.isPointInFill(local(shape, inside)) || shape.isPointInStroke(local(shape, inside)));
           }

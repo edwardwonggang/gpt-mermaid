@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { inspectStatePorts } from "./state-ports.mjs";
 
 export async function verifyCrossingQuality(page, output) {
   const report = await page.evaluate(async () => {
@@ -27,7 +28,8 @@ Completed --> [*]`);
       const w = { x: c.x - a.x, y: c.y - a.y }, determinant = cross(u, v);
       if (Math.abs(determinant) < 1e-7) return false;
       const t = cross(w, v) / determinant, s = cross(w, u) / determinant;
-      return t > 1e-6 && t < 1 - 1e-6 && s > 1e-6 && s < 1 - 1e-6;
+      return t > 1e-6 && t < 1 - 1e-6 && s > 1e-6 && s < 1 - 1e-6
+        ? { x: a.x + t * u.x, y: a.y + t * u.y } : null;
     };
     const verified = [];
     for (const { id, result } of samples) {
@@ -41,7 +43,10 @@ Completed --> [*]`);
             const length = edge.getTotalLength(), count = Math.max(2, Math.ceil(length / 1.3)), points = [];
             for (let i = 0; i <= count; i++) {
               const p = edge.getPointAtLength(length * i / count);
-              const root = new DOMPoint(p.x, p.y).matrixTransform(edge.getScreenCTM()).matrixTransform(inverse);
+              const raw = new DOMPoint(p.x, p.y).matrixTransform(edge.getScreenCTM()).matrixTransform(inverse);
+              // getPointAtLength 的浮点噪声会把同一 y=32 的公共直线采成32.000006，
+              // 再误报穿越。仅量化到万分之一SVG单位，仍远小于可见几何误差。
+              const root = { x: Math.round(raw.x * 1e4) / 1e4, y: Math.round(raw.y * 1e4) / 1e4 };
               while (points.length >= 2) {
                 const a = points.at(-2), b = points.at(-1);
                 if (Math.abs((b.x - a.x) * (root.y - b.y) - (b.y - a.y) * (root.x - b.x)) > 0.001) break;
@@ -49,27 +54,50 @@ Completed --> [*]`);
               }
               points.push({ x: root.x, y: root.y });
             }
-            return { id: edge.dataset.id || edge.id, points };
+            return { id: edge.dataset.id || edge.id, points, source:edge.dataset.gptmSource,
+              target:edge.dataset.gptmTarget,shared:edge.dataset.gptmSharedTip,sharedStart:edge.dataset.gptmSharedStart };
           });
-        const crossings = [];
+        const crossings = [], hits = [];
         for (let i = 0; i < paths.length; i++) for (let j = i + 1; j < paths.length; j++) {
           const a = paths[i], b = paths[j];
           let hit = false;
           for (let k = 1; k < a.points.length && !hit; k++) for (let l = 1; l < b.points.length; l++) {
-            if (intersections(a.points[k - 1], a.points[k], b.points[l - 1], b.points[l])) { hit = true; break; }
+            const point = intersections(a.points[k - 1], a.points[k], b.points[l - 1], b.points[l]);
+            if (point) {
+              hits.push({a:a.id,b:b.id,point,sourceA:a.source,sourceB:b.source,
+                targetA:a.target,targetB:b.target,sharedA:a.shared,sharedB:b.shared,
+                sharedStartA:a.sharedStart,sharedStartB:b.sharedStart});
+              hit = true; break;
+            }
           }
           if (hit) crossings.push([a.id, b.id]);
         }
-        verified.push({ id, routing: result.routing, crossings });
+        verified.push({ id, routing: result.routing, crossings, hits,
+          ...(crossings.length || id.includes("state") ? {svg:result.svg}: {}) });
       } finally { host.remove(); }
     }
     return { gallery, verified };
   });
   await fs.mkdir(output, { recursive: true });
+  for (const sample of report.verified.filter(s=>s.svg)) {
+    if (sample.id.includes("state")) {
+      sample.ports = await page.evaluate(inspectStatePorts, sample.svg);
+    }
+    if (sample.crossings.length) await fs.writeFile(path.join(output, `${sample.id}-crossing.svg`), sample.svg);
+    delete sample.svg;
+  }
   await fs.writeFile(path.join(output, "crossing-quality.json"), JSON.stringify(report, null, 2));
   for (const sample of report.verified) {
     assert.equal(sample.routing.status, "clear", `${sample.id} 尚有未解交叉`);
     assert.equal(sample.crossings.length, 0, `${sample.id} 最终SVG独立采样发现交叉: ${JSON.stringify(sample.crossings)}`);
+    if (sample.ports) {
+      assert.equal(sample.ports.length, sample.routing.checkedEdges, `${sample.id} 端口检查不能遗漏边`);
+      for (const edge of sample.ports) for (const port of edge.endpoints) {
+        assert(edge.sharedArrowValid && port.middleError < .1 && port.contourGap < 1.2
+          && port.controlLead >= 39.9 && port.normalError < .1,
+        `${sample.id} ${edge.id} 未满足中点及法向引线：${JSON.stringify(port)}`);
+      }
+    }
   }
   for (const sample of report.gallery) {
     assert(sample.status !== "clear" || sample.crossings === 0, `${sample.id} 不能假报无交叉`);

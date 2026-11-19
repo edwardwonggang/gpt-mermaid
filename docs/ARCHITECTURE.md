@@ -71,6 +71,10 @@ next serialized render.
 - Arrow height is measured from base midpoint to tip, along its direction. Every triangle uses the same 10:8 geometry and scales uniformly.
 - Layout `data-points` identifies connection anchors; browser `isPointInFill()` identifies actual contour intersections. A bounding box alone does not prove contact.
 - 流程节点归属使用 `db.getData().nodes/edges`，不解析 ID 子串或匹配标签文字；边重排后再次验证非目标节点碰撞。
+- 状态图端口固定在四边中点，使用40单位控制引线保证圆角后至少32单位法向路径。
+  同向同侧在框外分叉/汇合，只共享可证明连续的首/尾段；共享末端显示一个三角，但保留每条逻辑边和标签。
+  复合状态外框来自`g.statediagram-cluster[data-id]`，内部路由不把自己的祖先填充区当障碍。
+  每次改路清除旧标签预留点；标签位置必须属于当前路径。
 - 后处理顺序：文字校准 → 可选折返 → 路由整理 → 真实轮廓贴边 → 标签投影 → 通用交叉避障与必要贴边复核 → 画布尺寸 → 方向色和箭头 → 线杆裁切 → 最终交叉报告。
 - 折返不改图源、不镜像文字。反馈、跨层和子图等无安全切口的情况明确保留原布局。
 - 不以图名、节点文字或源码关键词选择避障分支。原路径可用时保留；候选必须检查完整路径的自交、重走、长度及折弯。

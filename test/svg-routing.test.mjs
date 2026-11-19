@@ -157,7 +157,10 @@ test("双向箭头尺寸约束包含拥挤的源端", (t) => {
 function nativeFixture(spec) {
   const item = fixture(spec);
   const nodes = [...item.nodeElements.values()];
-  nodes.forEach((node, index) => { node.dataset = { id: spec.nodes[index].id }; });
+  nodes.forEach((node, index) => {
+    node.dataset = { id: spec.nodes[index].id };
+    node.contains = other => node === other;
+  });
   item.edges.forEach((edge, index) => {
     const model = item.graph.edges[index];
     edge.dataset.source = model.start;
@@ -172,7 +175,7 @@ function nativeFixture(spec) {
     getBBox: () => edge.labelBox, getScreenCTM: () => item.svg.getScreenCTM(),
   }));
   item.svg.querySelectorAll = (selector) => {
-    if (selector === "g.node[data-id]") return nodes;
+    if (selector === "g.node[data-id],g.statediagram-cluster[data-id]") return nodes;
     if (selector.startsWith("path.transition")) return item.edges;
     if (selector === "g.edgeLabel") return labels;
     return [];
@@ -507,6 +510,19 @@ test("相同目标的合法共享末段不计作交叉", () => {
   ];
   assert.deepEqual(crossingPairs(edges), []);
   assert.deepEqual(crossingPairs(edges.slice().reverse()), [], "共享主干判据应与边枚举顺序无关");
+});
+
+test("同源公共前缀仅豁免分叉前的连续共享线段，重入交叉仍报错", () => {
+  const first = crossingEdge("a", [[0, 0], [40, 0], [40, 100]], { source: "S", target: "A", sharedStart: "s" });
+  const branch = crossingEdge("b", [[0, 0], [80, 0], [80, -50]], { source: "S", target: "B", sharedStart: "s" });
+  assert.deepEqual(crossingPairs([first, branch]), []);
+  assert.deepEqual(crossingPairs([branch, first]), []);
+  assert.equal(crossingPairs([first, { ...branch, source: "OTHER" }]).length, 1);
+  const reenter = crossingEdge("c", [[0, 0], [80, 0], [80, 60], [20, 60]],
+    { source: "S", target: "C", sharedStart: "s" });
+  const pairs = crossingPairs([first, reenter]);
+  assert.equal(pairs.length, 1);
+  assert(pairs[0].hits.some(p => p.kind === "cross" && p.x === 40 && p.y === 60));
 });
 
 test("共享末段只能豁免实际重叠区间，不能吞掉同一长线段远处的十字", () => {
