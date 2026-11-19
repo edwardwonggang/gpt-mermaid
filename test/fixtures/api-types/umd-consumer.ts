@@ -8,6 +8,8 @@ const config = {
   runtimeTimeoutMs: 15_000,
 };
 GPTMermaid.configure(config);
+void GPTMermaid.load(config);
+void window.GPTMermaid.load(config);
 void GPTMermaid.renderSvg("flowchart LR\nA --> B", config);
 void GPTMermaid.renderAll(document, config);
 window.GPTMermaid.configure({ preset: "tokyo" });

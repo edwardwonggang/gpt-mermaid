@@ -586,15 +586,15 @@ function safeStyleScopeId(value) {
 }
 function sanitizeMermaidSource(source) {
   const { bom, frontmatter, body } = splitFrontmatter(String(source || ""));
-  let blocked = false;
+  let blocked2 = false;
   const stripped = body.replace(DIRECTIVE_RE, (directive) => {
     if (SECURITY_RE.test(directive)) {
-      blocked = true;
+      blocked2 = true;
       return "";
     }
     return safeInitDirective(directive);
   });
-  if (blocked) return null;
+  if (blocked2) return null;
   const cleaned = `${bom}${frontmatter}${stripClickStatements(stripped)}`.trim();
   return cleaned || null;
 }
@@ -986,11 +986,11 @@ function simplifyPortJog(edge, start, side, peers, boxes) {
   edge.points = start ? next : next.reverse();
 }
 function loopRoute(box, side, size, reach = 0, lane = 0, laneCount = 1) {
-  const horizontal = horizontalSide(side), center = horizontal ? box.y + box.height / 2 : box.x + box.width / 2;
+  const horizontal = horizontalSide(side), center2 = horizontal ? box.y + box.height / 2 : box.x + box.width / 2;
   const span = Math.min(32, (horizontal ? box.height : box.width) * 0.7);
   const count = Math.max(1, Math.floor(laneCount) || 1);
   const slotSpan = span / count;
-  const laneCenter = center + (Math.max(0, lane) - (count - 1) / 2) * slotSpan;
+  const laneCenter = center2 + (Math.max(0, lane) - (count - 1) / 2) * slotSpan;
   const laneSpan = count === 1 ? span : Math.max(2, Math.min(span, slotSpan * 0.65));
   const offset = Math.max(reach, 42, (horizontal ? size.width : size.height) + 24);
   const a = onSide(box, side, laneCenter - laneSpan / 2), b = onSide(box, side, laneCenter + laneSpan / 2);
@@ -1120,12 +1120,12 @@ function asPath(element) {
   element.replaceWith(path);
   return path;
 }
-function nativeLabelBox(center, size) {
+function nativeLabelBox(center2, size) {
   return {
-    x: center.x - size.width / 2 - 7,
-    y: center.y - size.height / 2 - 7,
-    right: center.x + size.width / 2 + 7,
-    bottom: center.y + size.height / 2 + 7
+    x: center2.x - size.width / 2 - 7,
+    y: center2.y - size.height / 2 - 7,
+    right: center2.x + size.width / 2 + 7,
+    bottom: center2.y + size.height / 2 + 7
   };
 }
 function labelOnRoute(svg, points, size, barriers, occupied, original) {
@@ -1153,7 +1153,7 @@ function labelOnRoute(svg, points, size, barriers, occupied, original) {
   }
   return candidates.sort((a, b) => a.score - b.score)[0];
 }
-function routeNativeEdges(svg, options = {}) {
+function routeNativeEdges(svg, options2 = {}) {
   const nodes = new Map([...svg.querySelectorAll("g.node[data-id],g.statediagram-cluster[data-id]")].map((element) => {
     const shape = nodeShape(element);
     return [element.dataset.id, shape && { element, shape, box: boundsInSvg(svg, shape) }];
@@ -1220,14 +1220,14 @@ function routeNativeEdges(svg, options = {}) {
         points = [a, first, corner, last, b];
       }
       if (!clearRoute(points, obstacles, 4)) continue;
-      const center = { x: (points[1].x + points[2].x) / 2, y: (points[1].y + points[2].y) / 2 };
-      const reservation = nativeLabelBox(center, size);
+      const center2 = { x: (points[1].x + points[2].x) / 2, y: (points[1].y + points[2].y) / 2 };
+      const reservation = nativeLabelBox(center2, size);
       if (label && [...nodes.values()].some((node) => boxesOverlap(reservation, node.box))) continue;
       edge.points = points;
       writePoints(svg, edge.element, points);
       if (label) {
-        edge.element.setAttribute("data-gptm-label-x", String(center.x));
-        edge.element.setAttribute("data-gptm-label-y", String(center.y));
+        edge.element.setAttribute("data-gptm-label-x", String(center2.x));
+        edge.element.setAttribute("data-gptm-label-y", String(center2.y));
       }
       edge.element.setAttribute("data-gptm-native-rerouted", "true");
       edge.element.setAttribute("data-gptm-self-loop", "true");
@@ -1280,15 +1280,15 @@ function routeNativeEdges(svg, options = {}) {
   const shields = [...ports.values()].filter((port) => port.edge.compatible).map((port) => {
     const arrow = port.edge.element.hasAttribute(port.start ? "marker-start" : "marker-end");
     const half = arrow ? Math.min(9, port.spacing * 0.38) : 2.5, p = port.anchor, horizontal = horizontalSide(port.side);
-    const distance2 = arrow ? 20 : 6, out = signOf(port.side) * distance2;
+    const distance3 = arrow ? 20 : 6, out = signOf(port.side) * distance3;
     const x = horizontal ? Math.min(p.x, p.x + out) : p.x - half;
     const y = horizontal ? p.y - half : Math.min(p.y, p.y + out);
     return {
       edge: port.edge,
       x,
       y,
-      right: x + (horizontal ? distance2 : half * 2),
-      bottom: y + (horizontal ? half * 2 : distance2)
+      right: x + (horizontal ? distance3 : half * 2),
+      bottom: y + (horizontal ? half * 2 : distance3)
     };
   });
   const approaches = [...ports.values()].filter((port) => port.edge.compatible).map((port) => {
@@ -1422,10 +1422,10 @@ function routeNativeEdges(svg, options = {}) {
         return result;
       };
       if (size2) {
-        const center = { x: size2.x + size2.width / 2, y: size2.y + size2.height / 2 };
+        const center2 = { x: size2.x + size2.width / 2, y: size2.y + size2.height / 2 };
         for (const horizontal of [true, false]) {
-          const enter = horizontal ? { x: center.x - 8, y: center.y } : { x: center.x, y: center.y - 8 };
-          const exit = horizontal ? { x: center.x + 8, y: center.y } : { x: center.x, y: center.y + 8 };
+          const enter = horizontal ? { x: center2.x - 8, y: center2.y } : { x: center2.x, y: center2.y - 8 };
+          const exit = horizontal ? { x: center2.x + 8, y: center2.y } : { x: center2.x, y: center2.y + 8 };
           const through = vector2(enter, exit);
           const before = search(
             start,
@@ -1570,9 +1570,9 @@ function routeNativeEdges(svg, options = {}) {
       if (route) consider(simplifyPoints([a.anchor, ...route, b.anchor]));
     }
     if (!best && size) {
-      const center = { x: size.x + size.width / 2, y: size.y + size.height / 2 }, candidates = [];
+      const center2 = { x: size.x + size.width / 2, y: size.y + size.height / 2 }, candidates = [];
       for (let row = -6; row <= 6; row++) for (let column = -6; column <= 6; column++) {
-        const point = { x: center.x + column * 22, y: center.y + row * 18 }, box = nativeLabelBox(point, size);
+        const point = { x: center2.x + column * 22, y: center2.y + row * 18 }, box = nativeLabelBox(point, size);
         if (labelBarriers.some((b2) => boxesOverlap(box, b2)) || occupied.some(([p, q]) => segmentBlocked(p, q, [box], 2))) continue;
         candidates.push({ ...point, box, score: distance(start, point) + distance(point, end) });
       }
@@ -1629,7 +1629,7 @@ function routeNativeEdges(svg, options = {}) {
   }
   svg.setAttribute("data-gptm-native-routes", String(edges.filter((e) => e.element.hasAttribute("data-gptm-native-rerouted")).length));
   const failedStateEdges = edges.filter((edge) => edge.state && edge.compatible && edge.source !== edge.target && !edge.element.hasAttribute("data-gptm-native-rerouted"));
-  if (!options.retry && failedStateEdges.length) {
+  if (!options2.retry && failedStateEdges.length) {
     return routeNativeEdges(svg, { retry: true });
   }
 }
@@ -1673,9 +1673,9 @@ function centerTitles(svg) {
     const right = Math.max(...textBoxes.map((item) => item.right));
     const inverse = node.getScreenCTM()?.inverse();
     if (!inverse) continue;
-    const center = new DOMPoint((left + right) / 2, textBoxes[0].top).matrixTransform(inverse);
+    const center2 = new DOMPoint((left + right) / 2, textBoxes[0].top).matrixTransform(inverse);
     const target = new DOMPoint(box.left + box.width / 2, box.top).matrixTransform(inverse);
-    shift(label, target.x - center.x, 0);
+    shift(label, target.x - center2.x, 0);
   }
 }
 function journeyTextMeasurer(text) {
@@ -2008,8 +2008,8 @@ function sequenceAnchor(svg, actorId, y, referenceX, towardsX) {
   });
   const activation = activations[0]?.getBBox();
   if (!activation) return { center: x, border: x };
-  const center = activation.x + activation.width / 2;
-  return { center, border: towardsX >= center ? activation.x + activation.width : activation.x };
+  const center2 = activation.x + activation.width / 2;
+  return { center: center2, border: towardsX >= center2 ? activation.x + activation.width : activation.x };
 }
 function sequenceNumbers(svg, variables) {
   for (const text of svg.querySelectorAll("text.sequenceNumber")) {
@@ -2120,8 +2120,8 @@ function clippedSegments(length, head, tail, pattern, offset) {
 }
 function arrowCoveredLength(edge, length, depth, start) {
   if (!depth || typeof edge.getPointAtLength !== "function") return depth;
-  const point = (distance2) => {
-    const p = edge.getPointAtLength(start ? distance2 : length - distance2);
+  const point = (distance3) => {
+    const p = edge.getPointAtLength(start ? distance3 : length - distance3);
     if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) throw new Error("invalid SVG point");
     return p;
   };
@@ -2129,8 +2129,8 @@ function arrowCoveredLength(edge, length, depth, start) {
   const magnitude = Math.hypot(adjacent.x - tip.x, adjacent.y - tip.y);
   if (!magnitude) return depth;
   const v = { x: (adjacent.x - tip.x) / magnitude, y: (adjacent.y - tip.y) / magnitude };
-  const inside = (distance2) => {
-    const p = point(distance2), dx = p.x - tip.x, dy = p.y - tip.y;
+  const inside = (distance3) => {
+    const p = point(distance3), dx = p.x - tip.x, dy = p.y - tip.y;
     const along = dx * v.x + dy * v.y, across = dx * v.y - dy * v.x;
     return along >= -1e-5 && along <= depth && Math.abs(across) <= along * 0.4 + 1e-4;
   };
@@ -2329,8 +2329,8 @@ function routeC4Edges(svg, graph, variables) {
     const samples = Array.from({ length: 41 }, (_, i) => inSvg(svg, original, original.getPointAtLength(length * i / 40)));
     let points = [start, end];
     if (samples.slice(1).some((p, i) => segmentBlocked(samples[i], p, obstacles, 5))) {
-      const center = (box2) => ({ x: box2.x + box2.width / 2, y: box2.y + box2.height / 2 });
-      const a = center(source.box), b = center(target.box), horizontal = Math.abs(b.x - a.x) >= Math.abs(b.y - a.y);
+      const center2 = (box2) => ({ x: box2.x + box2.width / 2, y: box2.y + box2.height / 2 });
+      const a = center2(source.box), b = center2(target.box), horizontal = Math.abs(b.x - a.x) >= Math.abs(b.y - a.y);
       const direction = horizontal ? Math.sign(b.x - a.x) : Math.sign(b.y - a.y);
       const port = (node, point, outward) => horizontal ? { x: outward > 0 ? node.box.right : node.box.x, y: point.y } : { x: point.x, y: outward > 0 ? node.box.bottom : node.box.y };
       const p = port(source, a, direction), q = port(target, b, -direction);
@@ -2384,11 +2384,11 @@ var init_svg_c4 = __esm({
 });
 
 // src/svg-adaptive.js
-function optionsFor(options) {
-  const input = options && typeof options === "object" ? options : {};
+function optionsFor(options2) {
+  const input = options2 && typeof options2 === "object" ? options2 : {};
   const positive = (value, fallback) => Number.isFinite(value) && value > 0 ? value : fallback;
   return {
-    enabled: options !== false && input.enabled !== false,
+    enabled: options2 !== false && input.enabled !== false,
     maxWidth: positive(input.maxWidth, ADAPTIVE_LAYOUT_DEFAULTS.maxWidth),
     maxHeight: positive(input.maxHeight, ADAPTIVE_LAYOUT_DEFAULTS.maxHeight),
     gap: positive(input.gap, ADAPTIVE_LAYOUT_DEFAULTS.gap)
@@ -2469,8 +2469,8 @@ function flowRanks(nodes, edges) {
   for (const node of nodes) (layers[_a = ranks.get(node.id)] || (layers[_a] = [])).push(node);
   return { ranks, layers };
 }
-function planAdaptiveFlowLayout(graph, options) {
-  const config = optionsFor(options);
+function planAdaptiveFlowLayout(graph, options2) {
+  const config = optionsFor(options2);
   const report = { status: "unchanged", reason: "within-threshold", rows: 1, columns: 1 };
   const skip = (reason) => ({ ...report, status: "unsupported", reason });
   if (!config.enabled) return { ...report, reason: "disabled" };
@@ -2500,8 +2500,8 @@ function planAdaptiveFlowLayout(graph, options) {
   const ranked = flowRanks(nodes, edges);
   if (ranked.reason) return skip(ranked.reason);
   const { ranks, layers } = ranked;
-  const center = (box, key) => box[key] + box[key === "x" ? "width" : "height"] / 2;
-  if (edges.some((edge) => sign * (center(nodes.find((node) => node.id === edge.end).box, axis) - center(nodes.find((node) => node.id === edge.start).box, axis)) <= 0)) {
+  const center2 = (box, key) => box[key] + box[key === "x" ? "width" : "height"] / 2;
+  if (edges.some((edge) => sign * (center2(nodes.find((node) => node.id === edge.end).box, axis) - center2(nodes.find((node) => node.id === edge.start).box, axis)) <= 0)) {
     return skip("non-monotonic-layout");
   }
   const cuts = layers.slice(0, -1).map((layer, index) => ({
@@ -2558,9 +2558,9 @@ function planAdaptiveFlowLayout(graph, options) {
     band.forward = sign * (index % 2 ? -1 : 1);
     band.crossStart = cursor;
     band.map = (point) => {
-      const distance2 = sign > 0 ? point[axis] - band.box[axis] : band.box[axis] + band.box[axisSize] - point[axis];
+      const distance3 = sign > 0 ? point[axis] - band.box[axis] : band.box[axis] + band.box[axisSize] - point[axis];
       return {
-        [axis]: band.forward > 0 ? primaryMin + distance2 : primaryMax - distance2,
+        [axis]: band.forward > 0 ? primaryMin + distance3 : primaryMax - distance3,
         [cross2]: band.crossStart + point[cross2] - band.box[cross2]
       };
     };
@@ -2571,7 +2571,7 @@ function planAdaptiveFlowLayout(graph, options) {
     cursor += band.box[crossSize] + Math.max(config.gap, (boundaryLabel?.[crossSize] || 0) + 24);
   });
   const positions = nodes.map((node) => {
-    const point = nodeBands.get(node.id).map({ x: center(node.box, "x"), y: center(node.box, "y") });
+    const point = nodeBands.get(node.id).map({ x: center2(node.box, "x"), y: center2(node.box, "y") });
     return {
       id: node.id,
       x: point.x,
@@ -2593,8 +2593,8 @@ function planAdaptiveFlowLayout(graph, options) {
     if (fromBand === toBand) {
       points = edge.points.map(fromBand.map);
       if (edge.labelBox) label = fromBand.map({
-        x: center(edge.labelBox, "x"),
-        y: center(edge.labelBox, "y")
+        x: center2(edge.labelBox, "x"),
+        y: center2(edge.labelBox, "y")
       });
     } else {
       const from = positionById.get(edge.start);
@@ -2670,9 +2670,9 @@ function publish(svg, report) {
   const { positions: _positions, routes: _routes, bounds: _bounds, ...summary } = report;
   return summary;
 }
-function applyAdaptiveFlowLayout(svg, graph, options) {
+function applyAdaptiveFlowLayout(svg, graph, options2) {
   const base = { status: "unchanged", reason: "disabled", rows: 1, columns: 1 };
-  if (!optionsFor(options).enabled) return publish(svg, base);
+  if (!optionsFor(options2).enabled) return publish(svg, base);
   if (!Array.isArray(graph?.nodes) || !Array.isArray(graph?.edges)) {
     return publish(svg, { ...base, status: "unsupported", reason: "missing-graph-metadata" });
   }
@@ -2717,7 +2717,7 @@ function applyAdaptiveFlowLayout(svg, graph, options) {
     if (nodeElements.length !== nodes.length || edgeElements2.length !== edges.length) {
       throw new Error("unmapped-graph-elements");
     }
-    const plan = planAdaptiveFlowLayout({ ...graph, nodes, edges }, options);
+    const plan = planAdaptiveFlowLayout({ ...graph, nodes, edges }, options2);
     if (plan.status !== "applied") return publish(svg, plan);
     const writes = [];
     for (const position of plan.positions) {
@@ -3176,9 +3176,9 @@ function sampleEdge(svg, element) {
     let farthest = 0, at = -1;
     for (let i = lo + 1; i < hi; i++) {
       const p = input[i], t = length2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / length2 ** 2)) : 0;
-      const distance2 = Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
-      if (distance2 > farthest) {
-        farthest = distance2;
+      const distance3 = Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
+      if (distance3 > farthest) {
+        farthest = distance3;
         at = i;
       }
     }
@@ -3498,13 +3498,13 @@ function planAvoidance(svg, edge, edges, model, alternatives = false) {
     extraX.push(other.box.x - GAP, other.box.right + GAP);
     extraY.push(other.box.y - GAP, other.box.bottom + GAP);
   }
-  const options = starts.flatMap((a) => ends.map((b) => ({ a, b, estimate: norm(a.lead, b.lead) + (a.penalty + b.penalty) * 0.2 }))).sort((a, b) => a.estimate - b.estimate);
+  const options2 = starts.flatMap((a) => ends.map((b) => ({ a, b, estimate: norm(a.lead, b.lead) + (a.penalty + b.penalty) * 0.2 }))).sort((a, b) => a.estimate - b.estimate);
   let best;
   let labelSearches = 0;
-  for (const { a, b } of options.slice(0, 12)) {
+  for (const { a, b } of options2.slice(0, 12)) {
     if (budget && budget.remaining <= 0) break;
-    const blocked = (p, q) => segmentBlocked(p, q, foreignBoxes) || walls.some(([r, s]) => segmentIntersection(p, q, r, s));
-    if (blocked(a.anchor, a.lead) || blocked(b.lead, b.anchor)) continue;
+    const blocked2 = (p, q) => segmentBlocked(p, q, foreignBoxes) || walls.some(([r, s]) => segmentIntersection(p, q, r, s));
+    if (blocked2(a.anchor, a.lead) || blocked2(b.lead, b.anchor)) continue;
     const directions = {
       start: vector(a.anchor, a.lead),
       end: vector(b.lead, b.anchor),
@@ -3530,9 +3530,9 @@ function planAvoidance(svg, edge, edges, model, alternatives = false) {
       return true;
     };
     if (consider(route) || !ownLabel || best || ++labelSearches > 1) continue;
-    const label = ownLabel.box, center = { x: (label.x + label.right) / 2, y: (label.y + label.bottom) / 2 }, candidates = [];
+    const label = ownLabel.box, center2 = { x: (label.x + label.right) / 2, y: (label.y + label.bottom) / 2 }, candidates = [];
     for (let row = -3; row <= 3; row++) for (let column = -3; column <= 3; column++) {
-      const p = { x: center.x + column * (label.width / 2 + GAP), y: center.y + row * (label.height + GAP) };
+      const p = { x: center2.x + column * (label.width / 2 + GAP), y: center2.y + row * (label.height + GAP) };
       const box = {
         x: p.x - label.width / 2 - 7,
         right: p.x + label.width / 2 + 7,
@@ -3548,7 +3548,7 @@ function planAvoidance(svg, edge, edges, model, alternatives = false) {
       const to = horizontal ? { x: p.x + 8, y: p.y } : { x: p.x, y: p.y + 8 };
       const forward = norm(a.lead, from) + norm(to, b.lead) <= norm(a.lead, to) + norm(from, b.lead);
       const enter = forward ? from : to, exit = forward ? to : from, v = vector(enter, exit);
-      if (blocked(enter, exit)) continue;
+      if (blocked2(enter, exit)) continue;
       const before = orthogonalRoute(a.lead, enter, boxes, GAP, [], { ...directions, end: v });
       const after = orthogonalRoute(exit, b.lead, boxes, GAP, [], { ...directions, start: v });
       if (before && after) consider([...before, ...after]);
@@ -3719,8 +3719,8 @@ function tryPlanarLayout(svg, repairConnections) {
       for (const node of model.nodes) {
         if (node.id === edge.source || node.id === edge.target) continue;
         const p = positions.get(node.id), t = Math.max(0, Math.min(1, ((p.x - a.x) * v.x + (p.y - a.y) * v.y) / length2));
-        const distance2 = norm(p, { x: a.x + t * v.x, y: a.y + t * v.y });
-        scale = Math.max(scale, (Math.hypot(node.box.width, node.box.height) / 2 + 20) / distance2);
+        const distance3 = norm(p, { x: a.x + t * v.x, y: a.y + t * v.y });
+        scale = Math.max(scale, (Math.hypot(node.box.width, node.box.height) / 2 + 20) / distance3);
       }
     }
     const bounds = boxOf([...positions.values()]);
@@ -3746,11 +3746,11 @@ function tryPlanarLayout(svg, repairConnections) {
     }
     for (const edge of liveEdges) {
       const a = point(edge.source), b = point(edge.target), v = vector(a, b), length = norm(a, b);
-      const port = (center, box, sign, start) => {
+      const port = (center2, box, sign, start) => {
         const t = Math.min(Math.abs(box.width / 2 / v.x), Math.abs(box.height / 2 / v.y));
         const oldAnchor = start ? edge.controls?.[0] : edge.controls?.at(-1), oldTip = start ? edge.points[0] : edge.points.at(-1);
         const offset = !triangleCompatible(edge.element) && oldAnchor ? norm(oldAnchor, oldTip) : 0;
-        return { x: center.x + sign * v.x * (t + offset / length), y: center.y + sign * v.y * (t + offset / length) };
+        return { x: center2.x + sign * v.x * (t + offset / length), y: center2.y + sign * v.y * (t + offset / length) };
       };
       writePoints(svg, edge.element, [port(a, boxes.get(edge.source), 1, true), port(b, boxes.get(edge.target), -1, false)]);
       edge.element.removeAttribute("data-gptm-label-x");
@@ -4030,12 +4030,12 @@ function withAbortTimeout(value, {
 }
 function createSerialScheduler() {
   const queue = [];
-  let running = false;
   let active = null;
   function schedule(run, {
     signal,
     timeoutMs = DEFAULT_RENDER_TIMEOUT_MS,
-    timeoutMessage
+    timeoutMessage,
+    queueTimeoutMs = timeoutMs
   } = {}) {
     return new Promise((resolve, reject) => {
       const item = {
@@ -4047,12 +4047,13 @@ function createSerialScheduler() {
         reject,
         controller: new AbortController(),
         started: false,
-        cancelled: false,
+        queueTimer: null,
         onExternalAbort: null
       };
       const cancelQueued = (reason) => {
-        if (item.cancelled) return;
-        item.cancelled = true;
+        const index = queue.indexOf(item);
+        if (index !== -1) queue.splice(index, 1);
+        clearTimeout(item.queueTimer);
         item.signal?.removeEventListener?.("abort", item.onExternalAbort);
         reject(reason instanceof Error ? reason : abortError(void 0, reason));
       };
@@ -4067,37 +4068,36 @@ function createSerialScheduler() {
       }
       signal?.addEventListener?.("abort", item.onExternalAbort, { once: true });
       queue.push(item);
-      void drain();
+      item.queueTimer = setTimeout(
+        () => cancelQueued(timeoutError("gpt-mermaid: render queue timed out")),
+        positiveTimeout(queueTimeoutMs)
+      );
+      drain();
     });
   }
-  async function drain() {
-    if (running) return;
-    running = true;
-    try {
-      while (queue.length) {
-        const item = queue.shift();
-        if (item.cancelled) continue;
-        item.started = true;
-        active = item;
-        try {
-          const result = await withAbortTimeout(item.run(item.controller.signal), {
-            signal: item.signal,
-            timeoutMs: item.timeoutMs,
-            timeoutMessage: item.timeoutMessage
-          });
-          item.resolve(result);
-        } catch (error) {
-          item.controller.abort(error);
-          item.reject(error);
-        } finally {
-          item.signal?.removeEventListener?.("abort", item.onExternalAbort);
-          active = null;
-        }
-      }
-    } finally {
-      running = false;
-      if (queue.length) void drain();
-    }
+  function drain() {
+    if (active || !queue.length) return;
+    const item = queue.shift();
+    clearTimeout(item.queueTimer);
+    item.started = true;
+    active = item;
+    const execution = Promise.resolve().then(() => {
+      throwIfAborted(item.controller.signal);
+      return item.run(item.controller.signal);
+    });
+    const release = () => {
+      active = null;
+      drain();
+    };
+    execution.then(release, release);
+    withAbortTimeout(execution, {
+      signal: item.controller.signal,
+      timeoutMs: positiveTimeout(item.timeoutMs),
+      timeoutMessage: item.timeoutMessage
+    }).then(item.resolve, (error) => {
+      item.controller.abort(error);
+      item.reject(error);
+    }).finally(() => item.signal?.removeEventListener?.("abort", item.onExternalAbort));
   }
   return {
     schedule,
@@ -4110,6 +4110,841 @@ var init_runtime_guard = __esm({
   "src/runtime-guard.js"() {
     DEFAULT_RENDER_TIMEOUT_MS = 12e3;
     DEFAULT_RUNTIME_TIMEOUT_MS = 15e3;
+  }
+});
+
+// src/runtime-loader.js
+function validateRuntime(runtime) {
+  if (typeof runtime?.render !== "function" || typeof runtime?.initialize !== "function") {
+    throw new Error("gpt-mermaid: runtime must expose initialize and render");
+  }
+  return runtime;
+}
+function captureRuntime(globalObject, doc, script, receive) {
+  let capture = captures.get(globalObject);
+  if (!capture) {
+    const descriptor = Object.getOwnPropertyDescriptor(globalObject, "mermaid");
+    if (descriptor && (!descriptor.configurable || !("value" in descriptor) || !descriptor.writable)) {
+      throw new Error("gpt-mermaid: cannot track runtime export; pass an explicit runtime");
+    }
+    let value = descriptor?.value;
+    const owners = /* @__PURE__ */ new Map();
+    const get = () => value;
+    const set = (next) => {
+      value = next;
+      owners.get(doc.currentScript)?.(next);
+    };
+    Object.defineProperty(globalObject, "mermaid", {
+      configurable: true,
+      enumerable: descriptor?.enumerable ?? true,
+      get,
+      set
+    });
+    capture = {
+      owners,
+      release() {
+        if (owners.size) return;
+        const current = Object.getOwnPropertyDescriptor(globalObject, "mermaid");
+        if (current?.get === get && current?.set === set) {
+          if (!descriptor && value === void 0) delete globalObject.mermaid;
+          else Object.defineProperty(globalObject, "mermaid", {
+            configurable: true,
+            enumerable: true,
+            writable: true,
+            ...descriptor,
+            value
+          });
+        }
+        captures.delete(globalObject);
+      }
+    };
+    captures.set(globalObject, capture);
+  }
+  capture.owners.set(script, receive);
+  return () => {
+    capture.owners.delete(script);
+    capture.release();
+  };
+}
+function startDownload(doc, url, registry) {
+  const globalObject = doc.defaultView || globalThis;
+  const script = doc.createElement("script");
+  const record = { state: "loading", script, waiters: 0, runtime: null, promise: null, fail: null };
+  let resolve;
+  let reject;
+  record.promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  record.promise.catch(() => {
+  });
+  registry.set(url, record);
+  let releaseCapture = () => {
+  };
+  let exported;
+  let timer;
+  function finish(error, runtime) {
+    if (record.state !== "loading") return;
+    record.state = error ? "failed" : "ready";
+    clearTimeout(timer);
+    script.removeEventListener("load", onLoad);
+    script.removeEventListener("error", onError);
+    releaseCapture();
+    if (error) {
+      script.remove();
+      if (registry.get(url) === record) registry.delete(url);
+      reject(error);
+    } else {
+      record.runtime = runtime;
+      resolve(runtime);
+    }
+  }
+  function onLoad() {
+    try {
+      finish(null, validateRuntime(exported));
+    } catch (error) {
+      finish(error);
+    }
+  }
+  function onError() {
+    finish(new Error(`gpt-mermaid: failed to load ${url}`));
+  }
+  record.fail = finish;
+  try {
+    releaseCapture = captureRuntime(globalObject, doc, script, (runtime) => {
+      exported = runtime;
+    });
+    script.src = url;
+    script.async = true;
+    script.dataset.gptMermaidRuntime = url;
+    script.addEventListener("load", onLoad, { once: true });
+    script.addEventListener("error", onError, { once: true });
+    timer = setTimeout(
+      () => finish(timeoutError("gpt-mermaid: runtime download timed out")),
+      DEFAULT_RUNTIME_TIMEOUT_MS
+    );
+    doc.head.append(script);
+  } catch (error) {
+    finish(error);
+  }
+  return record;
+}
+async function loadRuntime(config = {}, baseUrl2, signal = config.signal) {
+  throwIfAborted(signal);
+  if (config.runtime != null) return validateRuntime(config.runtime);
+  const doc = globalThis.document;
+  if (!doc?.head) throw new Error("gpt-mermaid: runtime loading requires a document or explicit runtime");
+  const url = new URL(
+    config.runtimeUrl || "gpt-mermaid.runtime.min.js",
+    config.baseUrl || baseUrl2 || doc.baseURI
+  ).href;
+  let registry = downloads.get(doc);
+  if (!registry) {
+    registry = /* @__PURE__ */ new Map();
+    downloads.set(doc, registry);
+  }
+  const record = registry.get(url) || startDownload(doc, url, registry);
+  record.waiters++;
+  try {
+    return await withAbortTimeout(record.promise, {
+      signal,
+      timeoutMs: positiveTimeout(config.runtimeTimeoutMs, DEFAULT_RUNTIME_TIMEOUT_MS),
+      timeoutMessage: "gpt-mermaid: runtime load timed out"
+    });
+  } finally {
+    record.waiters--;
+    if (!record.waiters && record.state === "loading") {
+      record.fail(abortError("gpt-mermaid: runtime download has no waiters"));
+    }
+  }
+}
+var downloads, captures;
+var init_runtime_loader = __esm({
+  "src/runtime-loader.js"() {
+    init_runtime_guard();
+    downloads = /* @__PURE__ */ new WeakMap();
+    captures = /* @__PURE__ */ new WeakMap();
+  }
+});
+
+// src/state-constraints.js
+function simplify(points) {
+  const out = [];
+  for (const p of points) {
+    if (out.length && dist(out.at(-1), p) < EPS3) continue;
+    while (out.length > 1) {
+      const a = out.at(-2), b = out.at(-1);
+      if (Math.abs((b.x - a.x) * (p.y - b.y) - (b.y - a.y) * (p.x - b.x)) > EPS3 || (b.x - a.x) * (p.x - b.x) + (b.y - a.y) * (p.y - b.y) < 0) break;
+      out.pop();
+    }
+    out.push(p);
+  }
+  return out;
+}
+function blocked(a, b, n, pad = GAP2) {
+  const inside = (p) => p.x > n.x - pad + EPS3 && p.x < n.x + n.width + pad - EPS3 && p.y > n.y - pad + EPS3 && p.y < n.y + n.height + pad - EPS3;
+  if (inside(a) || inside(b)) return true;
+  const corners = [
+    { x: n.x - pad, y: n.y - pad },
+    { x: n.x + n.width + pad, y: n.y - pad },
+    { x: n.x + n.width + pad, y: n.y + n.height + pad },
+    { x: n.x - pad, y: n.y + n.height + pad }
+  ];
+  return corners.some((p, i) => segmentIntersection(a, b, p, corners[(i + 1) % 4])?.kind === "cross");
+}
+function commonPrefix(left, right) {
+  let a = left[0], b = right[0], i = 1, j = 1;
+  const shared = [];
+  while (i < left.length && j < right.length && dist(a, b) < EPS3) {
+    const p = left[i], q = right[j], al = dist(a, p), bl = dist(b, q);
+    const u = { x: (p.x - a.x) / al, y: (p.y - a.y) / al };
+    const v = { x: (q.x - b.x) / bl, y: (q.y - b.y) / bl };
+    if (dist(u, v) > EPS3) break;
+    const end = al < bl ? p : q;
+    shared.push([a, end]);
+    a = end;
+    b = end;
+    if (al <= bl + EPS3) i++;
+    if (bl <= al + EPS3) j++;
+  }
+  return shared;
+}
+function validateStateLayout(model) {
+  if (model.status === "unsupported") return { accepted: false, unsupported: model.reason, unmatched: model.unmatched };
+  const issues = [], nodes = new Map(model.nodes.map((n) => [n.id, n]));
+  const issue = (constraint, subject, detail) => issues.push({ constraint, subject, detail });
+  const validPoint = (p) => p && Number.isFinite(p.x) && Number.isFinite(p.y);
+  for (const n of model.nodes) if (![n.x, n.y, n.width, n.height].every(Number.isFinite) || n.width <= 0 || n.height <= 0) issue("G02", n.id, "\u8282\u70B9\u5C3A\u5BF8\u6216\u5750\u6807\u65E0\u6548");
+  if (nodes.size !== model.nodes.length) issue("G01", "nodes", "\u8282\u70B9ID\u91CD\u590D");
+  const ancestor = (parent, child) => {
+    let node = nodes.get(child);
+    const seen = /* @__PURE__ */ new Set();
+    while (node?.parentId) {
+      if (seen.has(node.id)) {
+        issue("G01", node.id, "\u5BB9\u5668\u5305\u542B\u73AF");
+        return false;
+      }
+      seen.add(node.id);
+      if (node.parentId === parent) return true;
+      node = nodes.get(node.parentId);
+    }
+    return false;
+  };
+  const segments2 = model.segments.filter((e) => {
+    if (!Array.isArray(e.points) || e.points.length < 2 || !e.points.every(validPoint) || !nodes.has(e.source) || !nodes.has(e.target)) {
+      issue("G02", e.id, "\u8DEF\u5F84\u6216\u5F52\u5C5E\u65E0\u6548");
+      return false;
+    }
+    if (!model.edges.some((r) => r.id === e.owner)) issue("G01", e.id, "\u672A\u58F0\u660E\u7684\u5173\u7CFB");
+    return true;
+  }).map((e) => ({ ...e, points: simplify(e.points) }));
+  for (const edge of model.edges) {
+    const pieces = segments2.filter((s) => s.owner === edge.id);
+    if (pieces.length !== (edge.label ? 2 : 1)) issue("G01", edge.id, "\u663E\u793A\u6BB5\u6570\u91CF\u4E0D\u4E00\u81F4");
+    if (pieces[0]?.source !== edge.source || pieces.at(-1)?.target !== edge.target) issue("G01", edge.id, "\u5173\u7CFB\u7AEF\u70B9\u4E0D\u4E00\u81F4");
+    if (edge.label) {
+      if (!pieces[0] || !pieces[1] || pieces[0].target !== pieces[1].source) issue("G01", edge.id, "\u6761\u4EF6\u6846\u65AD\u5F00");
+      const label = pieces[0] && nodes.get(pieces[0].target);
+      if (!label || label.kind !== "label" || label.owner !== edge.id || label.label !== edge.label) {
+        issue("G04", edge.id, "\u6761\u4EF6\u6846\u8BED\u4E49\u4E0D\u4E00\u81F4");
+      }
+      if (pieces[0]?.arrow !== false) issue("G04", edge.id, "\u6761\u4EF6\u5165\u53E3\u4E0D\u80FD\u8865\u9020\u7BAD\u5934");
+    }
+    if (pieces.at(-1) && pieces.at(-1).arrow !== (edge.arrow ?? true)) issue("G04", edge.id, "\u4E1A\u52A1\u7BAD\u5934\u4E22\u5931\u6216\u8865\u9020");
+  }
+  const ports = [];
+  for (const e of segments2) {
+    if (e.points.length < 2) {
+      issue("G06", e.id, "\u9000\u5316\u8DEF\u5F84");
+      continue;
+    }
+    for (const start of [true, false]) {
+      const n = nodes.get(start ? e.source : e.target), p = start ? e.points[0] : e.points.at(-1);
+      const q = start ? e.points[1] : e.points.at(-2);
+      const centers = [
+        { side: "NORTH", x: n.x + n.width / 2, y: n.y, vx: 0, vy: -1 },
+        { side: "SOUTH", x: n.x + n.width / 2, y: n.y + n.height, vx: 0, vy: 1 },
+        { side: "WEST", x: n.x, y: n.y + n.height / 2, vx: -1, vy: 0 },
+        { side: "EAST", x: n.x + n.width, y: n.y + n.height / 2, vx: 1, vy: 0 }
+      ].sort((a, b) => dist(a, p) - dist(b, p));
+      const port = centers[0], lead = (q.x - p.x) * port.vx + (q.y - p.y) * port.vy;
+      const normalError = Math.abs((q.x - p.x) * port.vy - (q.y - p.y) * port.vx);
+      ports.push({ segment: e.id, node: n.id, side: port.side, middleError: dist(port, p), lead, normalError });
+      if (dist(port, p) > EPS3 || normalError > EPS3) issue("G02", e.id, ports.at(-1));
+      if (lead < LEAD - EPS3) issue("G03", e.id, ports.at(-1));
+    }
+    for (let i = 1; i < e.points.length; i++) {
+      const a = e.points[i - 1], b = e.points[i];
+      if (Math.abs(a.x - b.x) > EPS3 && Math.abs(a.y - b.y) > EPS3) issue("G06", e.id, "\u659C\u6BB5");
+      if (i > 1) {
+        const previous = e.points[i - 2];
+        if ((a.x - previous.x) * (b.x - a.x) + (a.y - previous.y) * (b.y - a.y) < -EPS3) {
+          issue("G06", e.id, "\u76F8\u90BB\u53CD\u5411\u91CD\u8D70");
+        }
+      }
+      for (const n of nodes.values()) {
+        if (ancestor(n.id, e.source) || ancestor(n.id, e.target)) continue;
+        if (n.id === e.source && i === 1 || n.id === e.target && i === e.points.length - 1) continue;
+        if (blocked(a, b, n, n.id === e.source || n.id === e.target ? -1 : GAP2)) issue("G05", e.id, n.id);
+      }
+      for (let j = i + 2; j < e.points.length; j++) {
+        if (segmentIntersection(a, b, e.points[j - 1], e.points[j])) issue("G06", e.id, "\u81EA\u4EA4\u6216\u6298\u8FD4");
+      }
+    }
+  }
+  const boxes = [...nodes.values()];
+  for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
+    const a = boxes[i], b = boxes[j];
+    if (ancestor(a.id, b.id) || ancestor(b.id, a.id)) continue;
+    if (a.x < b.x + b.width + GAP2 && a.x + a.width + GAP2 > b.x && a.y < b.y + b.height + GAP2 && a.y + a.height + GAP2 > b.y) issue("G05", a.id, `\u6846\u4E0E\u6846\u8DDD\u79BB\u4E0D\u8DB3:${b.id}`);
+  }
+  const intersections = [];
+  for (let i = 0; i < segments2.length; i++) for (let j = i + 1; j < segments2.length; j++) {
+    const a = segments2[i], b = segments2[j], shared = [];
+    if (a.source === b.source) shared.push(...commonPrefix(a.points, b.points));
+    if (a.target === b.target) shared.push(...commonPrefix(a.points.slice().reverse(), b.points.slice().reverse()));
+    for (let p = 1; p < a.points.length; p++) for (let q = 1; q < b.points.length; q++) {
+      const hit = segmentIntersection(a.points[p - 1], a.points[p], b.points[q - 1], b.points[q]);
+      if (!hit) continue;
+      const onShared = shared.some(([x, y]) => Math.abs(dist(x, hit) + dist(hit, y) - dist(x, y)) < EPS3);
+      if (!onShared) intersections.push({ a: a.id, b: b.id, ...hit });
+    }
+  }
+  return {
+    logicalNodes: model.nodes.filter((n) => n.kind === "state").length,
+    logicalEdges: model.edges.length,
+    labels: model.nodes.filter((n) => n.kind === "label").length,
+    displaySegments: segments2.length,
+    ports,
+    issues,
+    intersections,
+    accepted: issues.length === 0 && intersections.length === 0
+  };
+}
+var EPS3, LEAD, GAP2, dist;
+var init_state_constraints = __esm({
+  "src/state-constraints.js"() {
+    init_path_intersections();
+    EPS3 = 0.01;
+    LEAD = 40;
+    GAP2 = 10;
+    dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  }
+});
+
+// src/state-model.js
+function expandModel(input) {
+  const order = [], visited = /* @__PURE__ */ new Set(), active = /* @__PURE__ */ new Set(), feedbackEdges = /* @__PURE__ */ new Set();
+  const visit = (id) => {
+    if (visited.has(id)) return;
+    visited.add(id);
+    active.add(id);
+    for (const edge of input.edges.filter((e) => e.source === id)) {
+      if (active.has(edge.target)) feedbackEdges.add(edge.id);
+      else visit(edge.target);
+    }
+    active.delete(id);
+    order.unshift(id);
+  };
+  for (const n of input.nodes.filter((n2) => n2.shape === "stateStart")) visit(n.id);
+  for (const n of input.nodes) visit(n.id);
+  const rank = new Map(order.map((id, i) => [id, i]));
+  const nodes = input.nodes.map((n) => ({ ...n, kind: "state" }));
+  const segments2 = [];
+  for (const edge of input.edges) {
+    const feedback = feedbackEdges.has(edge.id), loop = edge.source === edge.target;
+    if (edge.label) {
+      const id = `${edge.id}:label`;
+      nodes.push({ id, kind: "label", owner: edge.id, label: edge.label, width: edge.width, height: edge.height });
+      segments2.push({ id: `${edge.id}:in`, owner: edge.id, source: edge.source, target: id, arrow: false, feedback: loop ? false : feedback, loop });
+      segments2.push({ id: `${edge.id}:out`, owner: edge.id, source: id, target: edge.target, arrow: edge.arrow ?? true, feedback, loop });
+    } else segments2.push({ ...edge, owner: edge.id, arrow: edge.arrow ?? true, feedback, loop });
+  }
+  const sortRank = (n) => n.kind === "state" ? rank.get(n.id) * 2 : (() => {
+    const e = input.edges.find((e2) => e2.id === n.owner);
+    return rank.get(e.source) + rank.get(e.target);
+  })();
+  nodes.sort((a, b) => sortRank(a) - sortRank(b));
+  return { nodes, segments: segments2, edges: input.edges };
+}
+function graphFor(model, portSides, direction) {
+  return {
+    id: "root",
+    layoutOptions: { ...options, "elk.direction": direction || "DOWN" },
+    children: model.nodes.map((n) => {
+      const node = {
+        id: n.id,
+        width: (n.envelope?.width || n.width) + LEAD2 * 2,
+        height: (n.envelope?.height || n.height) + LEAD2 * 2
+      };
+      if (portSides) {
+        node.layoutOptions = { "elk.portConstraints": "FIXED_POS" };
+        node.ports = SIDES.map((side) => {
+          const p = center(node, side);
+          if (n.envelope) {
+            if (side === "NORTH" || side === "SOUTH") p.x = LEAD2 + n.envelope.dx + n.width / 2;
+            else p.y = LEAD2 + n.envelope.dy + n.height / 2;
+          }
+          return { id: `${n.id}:${side}`, ...p, width: 0, height: 0, layoutOptions: { "elk.port.side": side } };
+        });
+      }
+      return node;
+    }),
+    edges: model.segments.map((e) => {
+      const from = portSides ? `${e.source}:${portSides[e.id].source}` : e.source;
+      const to = portSides ? `${e.target}:${portSides[e.id].target}` : e.target;
+      return { id: e.id, sources: [e.feedback ? to : from], targets: [e.feedback ? from : to] };
+    })
+  };
+}
+function sideOf2(node, p) {
+  return SIDES.slice().sort((a, b) => {
+    const point = (side) => ({ x: node.x + center(node, side).x, y: node.y + center(node, side).y });
+    const q = point(a), r = point(b);
+    const gap = (side, x) => side === "EAST" || side === "WEST" ? Math.abs(x.x - p.x) : Math.abs(x.y - p.y);
+    return gap(a, q) - gap(b, r);
+  })[0];
+}
+async function solveStateScope(input, direction, layout) {
+  const model = expandModel(input);
+  const free = await layout(graphFor(model, null, direction));
+  const freeNodes = new Map(free.children.map((n) => [n.id, n]));
+  const bySegment = new Map(model.segments.map((e) => [e.id, e]));
+  const sides = Object.fromEntries(free.edges.map((edge, i) => {
+    const s = edge.sections[0], m = bySegment.get(edge.id);
+    const rotation = { DOWN: 0, LEFT: 1, UP: 2, RIGHT: 3 }[direction || "DOWN"];
+    const rotate = (side) => SIDES[(SIDES.indexOf(side) + rotation) % 4];
+    if (m.loop) {
+      if (m.source === m.target) return [edge.id, { source: rotate("EAST"), target: rotate("NORTH") }];
+      return [edge.id, m.arrow ? { source: rotate("NORTH"), target: rotate("NORTH") } : { source: rotate("EAST"), target: rotate("WEST") }];
+    }
+    if (m.feedback) {
+      const node = (id) => model.nodes.find((n) => n.id === id);
+      return [edge.id, {
+        source: rotate(node(m.source).kind === "label" ? "NORTH" : "EAST"),
+        target: rotate(node(m.target).kind === "label" ? "SOUTH" : "EAST")
+      }];
+    }
+    return [edge.id, {
+      source: sideOf2(freeNodes.get(m.source), s.startPoint),
+      target: sideOf2(freeNodes.get(m.target), s.endPoint)
+    }];
+  }));
+  for (const e of model.segments) for (const start of [true, false]) {
+    const n = model.nodes.find((n2) => n2.id === (start ? e.source : e.target));
+    const key = start ? "source" : "target";
+    if (!n.envelope?.blockedSides.includes(sides[e.id][key])) continue;
+    const forward = {
+      DOWN: ["SOUTH", "NORTH"],
+      UP: ["NORTH", "SOUTH"],
+      RIGHT: ["EAST", "WEST"],
+      LEFT: ["WEST", "EAST"]
+    }[direction || "DOWN"];
+    sides[e.id][key] = [forward[start ? 0 : 1], ...SIDES].find((s) => !n.envelope.blockedSides.includes(s));
+  }
+  const candidateFor = async (selected) => {
+    const fixed = await layout(graphFor(model, selected, direction));
+    const nodes = new Map(fixed.children.map((n) => {
+      const inputNode = model.nodes.find((m) => m.id === n.id);
+      return [n.id, {
+        ...inputNode,
+        x: n.x + LEAD2 + (inputNode.envelope?.dx || 0),
+        y: n.y + LEAD2 + (inputNode.envelope?.dy || 0)
+      }];
+    }));
+    const port = (node, side) => ({ x: node.x + center(node, side).x, y: node.y + center(node, side).y });
+    const fixedEdges = new Map(fixed.edges.map((e) => [e.id, e]));
+    const segments2 = model.segments.map((m) => {
+      const e = fixedEdges.get(m.id), s = e.sections[0], endpoints = selected[e.id];
+      const route = [s.startPoint, ...s.bendPoints || [], s.endPoint];
+      if (m.feedback) route.reverse();
+      return { ...m, sides: endpoints, points: [
+        port(nodes.get(m.source), endpoints.source),
+        ...route,
+        port(nodes.get(m.target), endpoints.target)
+      ] };
+    });
+    return { width: fixed.width, height: fixed.height, nodes: [...nodes.values()], segments: segments2, edges: input.edges, sides: selected };
+  };
+  let best = await candidateFor(sides), quality = validateStateLayout(best);
+  if (quality.accepted) return best;
+  const score = (result, report) => [
+    report.issues.length,
+    report.intersections.length,
+    result.segments.reduce((sum, e) => sum + e.points.length, 0),
+    result.width * result.height
+  ];
+  const better = (a, b) => a.some((v, i) => v < b[i] && a.slice(0, i).every((x, j) => x === b[j]));
+  let bestScore = score(best, quality);
+  for (const loopTurn of [0, 1, 2, 3]) for (const mirror of [false, true]) {
+    if (!loopTurn && !mirror) continue;
+    const selected = structuredClone(sides);
+    for (const edge of model.segments) {
+      if (edge.loop) for (const end of ["source", "target"]) {
+        selected[edge.id][end] = SIDES[(SIDES.indexOf(sides[edge.id][end]) + loopTurn) % 4];
+      }
+      else if (edge.feedback && mirror) {
+        const transverse = ["LEFT", "RIGHT"].includes(direction) ? ["NORTH", "SOUTH"] : ["EAST", "WEST"];
+        for (const end of ["source", "target"]) {
+          const index = transverse.indexOf(selected[edge.id][end]);
+          if (index >= 0) selected[edge.id][end] = transverse[1 - index];
+        }
+      }
+    }
+    const result = await candidateFor(selected), report = validateStateLayout(result);
+    if (report.accepted) return result;
+    const next = score(result, report);
+    if (better(next, bestScore)) {
+      best = result;
+      bestScore = next;
+    }
+  }
+  return best;
+}
+var STATE_LAYOUT_LEAD, LEAD2, SIDES, center, options;
+var init_state_model = __esm({
+  "src/state-model.js"() {
+    init_state_constraints();
+    STATE_LAYOUT_LEAD = 40;
+    LEAD2 = STATE_LAYOUT_LEAD;
+    SIDES = ["NORTH", "EAST", "SOUTH", "WEST"];
+    center = (n, side) => ({
+      x: side === "WEST" ? 0 : side === "EAST" ? n.width : n.width / 2,
+      y: side === "NORTH" ? 0 : side === "SOUTH" ? n.height : n.height / 2
+    });
+    options = {
+      "elk.algorithm": "layered",
+      "elk.direction": "DOWN",
+      "elk.edgeRouting": "ORTHOGONAL",
+      "elk.randomSeed": "1",
+      "elk.layered.cycleBreaking.strategy": "MODEL_ORDER",
+      "elk.layered.feedbackEdges": "true",
+      "elk.spacing.nodeNode": "32",
+      "elk.layered.spacing.nodeNodeBetweenLayers": "50",
+      "elk.spacing.edgeNode": "20",
+      "elk.layered.spacing.edgeNodeBetweenLayers": "20",
+      "elk.spacing.edgeEdge": "16",
+      "elk.layered.spacing.edgeEdgeBetweenLayers": "16"
+    };
+  }
+});
+
+// src/state-layout.js
+async function solveStateLayout(input, direction = "DOWN", layout) {
+  const containers = new Map(input.nodes.filter((n) => n.shape === "noteGroup").map((n) => [n.id, n]));
+  input = { ...input, nodes: input.nodes.filter((n) => !containers.has(n.id)).map((n) => {
+    const noteGroup = containers.get(n.parentId);
+    if (!noteGroup) return n;
+    const connector = input.edges.find((e) => e.note && (e.source === n.id || e.target === n.id));
+    const ownerId = connector && (connector.source === n.id ? connector.target : connector.source);
+    return { ...n, parentId: input.nodes.find((n2) => n2.id === ownerId)?.parentId, noteOwner: ownerId };
+  }) };
+  const notes = input.nodes.filter((n) => n.noteOwner), noteEdges = input.edges.filter((e) => e.note);
+  const associated = /* @__PURE__ */ new Map();
+  for (const note of notes) {
+    if (!associated.has(note.noteOwner)) associated.set(note.noteOwner, []);
+    associated.get(note.noteOwner).push(note);
+  }
+  input = { ...input, nodes: input.nodes.filter((n) => !n.noteOwner).map((n) => {
+    const decorations = associated.get(n.id) || [];
+    if (!decorations.length) return n;
+    const left = decorations.filter((x) => x.position === "left of"), right = decorations.filter((x) => x.position !== "left of");
+    const leftWidth = left.length ? Math.max(...left.map((x) => x.width)) + 90 : 0;
+    const rightWidth = right.length ? Math.max(...right.map((x) => x.width)) + 90 : 0;
+    const sideHeight = (list) => list.reduce((sum, x) => sum + x.height + 20, -20);
+    const height = Math.max(n.height, sideHeight(left), sideHeight(right));
+    return { ...n, envelope: {
+      width: n.width + leftWidth + rightWidth,
+      height,
+      dx: leftWidth,
+      dy: (height - n.height) / 2,
+      blockedSides: [...left.length ? ["WEST"] : [], ...right.length ? ["EAST"] : []]
+    } };
+  }), edges: input.edges.filter((e) => !e.note) };
+  const byId = new Map(input.nodes.map((n) => [n.id, n]));
+  for (const n of input.nodes) {
+    const seen = /* @__PURE__ */ new Set();
+    let current = n;
+    while (current?.parentId) {
+      if (seen.has(current.id)) throw new Error("constraint-conflict: containment-cycle");
+      seen.add(current.id);
+      current = byId.get(current.parentId);
+    }
+  }
+  const roots = input.nodes.filter((n) => !n.parentId);
+  const used = /* @__PURE__ */ new Set(), groups = /* @__PURE__ */ new Map();
+  const solveScope = async (parent) => {
+    const children = input.nodes.filter((n) => (n.parentId || null) === parent);
+    for (const node of children.filter((n) => n.isGroup)) {
+      const inner = await solveScope(node.id);
+      groups.set(node.id, inner);
+    }
+    const measured = children.map((n) => {
+      const inner = groups.get(n.id);
+      return inner ? { ...n, width: Math.max(n.width, inner.width + 32), height: inner.height + 64 } : n;
+    });
+    const ids = new Set(children.map((n) => n.id));
+    const edges = input.edges.filter((e) => ids.has(e.source) && ids.has(e.target));
+    edges.forEach((e) => used.add(e.id));
+    const local = await solveStateScope({ nodes: measured, edges }, direction, layout);
+    const nodes = [], segments2 = [...local.segments];
+    for (const n of local.nodes) {
+      nodes.push({ ...n, parentId: parent || void 0 });
+      const inner = groups.get(n.id);
+      if (!inner) continue;
+      const dx = n.x + 16 + (n.width - inner.width - 32) / 2, dy = n.y + 48;
+      nodes.push(...inner.nodes.map((c) => ({ ...c, x: c.x + dx, y: c.y + dy })));
+      segments2.push(...inner.segments.map((e) => ({
+        ...e,
+        points: e.points.map((p) => ({ x: p.x + dx, y: p.y + dy }))
+      })));
+    }
+    return { ...local, nodes, segments: segments2 };
+  };
+  if (!roots.length && input.nodes.length) throw new Error("constraint-conflict: containment-cycle");
+  for (const n of input.nodes) if (n.parentId && !byId.has(n.parentId)) throw new Error("unsupported: missing-parent");
+  const result = await solveScope(null);
+  const unmatched = input.edges.filter((e) => !used.has(e.id));
+  if (unmatched.length) return {
+    status: "unsupported",
+    reason: "cross-hierarchy-portals-required",
+    unmatched: unmatched.map((e) => e.id)
+  };
+  for (const note of notes) {
+    const owner = result.nodes.find((n) => n.id === note.noteOwner), right = note.position !== "left of";
+    const placed = {
+      ...note,
+      kind: "note",
+      x: right ? owner.x + owner.width + 90 : owner.x - 90 - note.width,
+      y: owner.y + (owner.height - note.height) / 2,
+      parentId: owner.parentId
+    };
+    result.nodes.push(placed);
+    const edge = noteEdges.find((e) => e.source === note.id || e.target === note.id), sourceIsNote = edge.source === note.id;
+    const p = { x: right ? owner.x + owner.width : owner.x, y: owner.y + owner.height / 2 };
+    const q = { x: right ? placed.x : placed.x + placed.width, y: placed.y + placed.height / 2 };
+    result.segments.push({ ...edge, owner: edge.id, points: sourceIsNote ? [q, p] : [p, q] });
+  }
+  return { ...result, edges: [...input.edges, ...noteEdges] };
+}
+var init_state_layout = __esm({
+  "src/state-layout.js"() {
+    init_state_model();
+  }
+});
+
+// src/state-svg.js
+function placement(svg, element) {
+  const m = svg.getScreenCTM().inverse().multiply(element.getScreenCTM());
+  return `matrix(${m.a},${m.b},${m.c},${m.d},${m.e},${m.f})`;
+}
+function textLabel(doc, value, x, y, font, fill) {
+  const text = doc.createElementNS(NS3, "text");
+  text.setAttribute("x", x);
+  text.setAttribute("y", y);
+  text.setAttribute("text-anchor", "middle");
+  text.setAttribute("dominant-baseline", "central");
+  text.setAttribute("font-family", font);
+  text.setAttribute("font-size", "14");
+  text.setAttribute("font-weight", "600");
+  text.setAttribute("fill", fill);
+  text.textContent = value;
+  return text;
+}
+function freezeGeometry(model) {
+  for (const n of model.nodes) Object.freeze(n);
+  for (const e of model.segments) {
+    e.points.forEach(Object.freeze);
+    Object.freeze(e.points);
+    Object.freeze(e);
+  }
+  Object.freeze(model.nodes);
+  Object.freeze(model.segments);
+  return Object.freeze(model);
+}
+async function layoutStateSvg(svg, semantic, layout, variables, signal) {
+  if (typeof layout !== "function" || !semantic?.nodes || !semantic?.edges) {
+    throw new Error("gpt-mermaid: state layout capability unavailable");
+  }
+  throwIfAborted(signal);
+  const doc = svg.ownerDocument;
+  const originalNodes = new Map([...svg.querySelectorAll("g[data-id]")].filter((n) => n.classList.contains("node") || n.classList.contains("statediagram-cluster") || n.classList.contains("cluster")).map((n) => [n.dataset.id, n]));
+  const originalEdges = new Map([...svg.querySelectorAll("path.transition[data-id]")].map((e) => [e.dataset.id, e]));
+  const originalLabels = new Map([...svg.querySelectorAll("g.edgeLabel")].map((l) => [
+    l.querySelector("[data-id]")?.dataset.id || l.dataset.id,
+    l
+  ]));
+  const views = /* @__PURE__ */ new Map();
+  const nodes = semantic.nodes.map((n) => {
+    if (n.shape === "noteGroup") return { ...n, width: 1, height: 1 };
+    if (n.shape === "divider") return { ...n, width: 80, height: 48 };
+    const element = originalNodes.get(n.id), shape = element && nodeShape(element);
+    if (!element || !shape) throw new Error(`gpt-mermaid: missing state geometry: ${n.id}`);
+    const box = boundsInSvg(svg, shape);
+    views.set(n.id, { element: element.cloneNode(true), box, transform: placement(svg, element) });
+    if (n.isGroup) {
+      const title = element.querySelector(".cluster-label,.label,.nodeLabel");
+      const size = title ? boundsInSvg(svg, title) : { width: 80, height: 20 };
+      return { ...n, width: Math.max(80, size.width + 32), height: 48 };
+    }
+    return { ...n, width: box.width, height: box.height };
+  });
+  const edges = semantic.edges.map((e) => {
+    if (!originalEdges.has(e.id)) throw new Error(`gpt-mermaid: missing state relation: ${e.id}`);
+    const element = originalLabels.get(e.id);
+    if (e.label && !element) throw new Error(`gpt-mermaid: missing state label: ${e.id}`);
+    const box = element ? boundsInSvg(svg, element) : { width: 0, height: 0 };
+    if (e.label) views.set(`${e.id}:label`, { element: element.cloneNode(true), box, transform: placement(svg, element) });
+    return { ...e, width: box.width, height: box.height };
+  });
+  const candidate = await solveStateLayout({ nodes, edges }, DIRECTION[semantic.direction] || "DOWN", async (graph) => {
+    throwIfAborted(signal);
+    const result = await layout(graph);
+    throwIfAborted(signal);
+    return result;
+  });
+  const quality = validateStateLayout(candidate);
+  if (quality.unsupported || quality.issues?.length) {
+    const error = new Error(`gpt-mermaid: state layout ${quality.unsupported || "constraint-conflict"}`);
+    error.violations = quality.issues || quality.unmatched;
+    throw error;
+  }
+  const model = freezeGeometry(candidate), byId = new Map(model.nodes.map((n) => [n.id, n]));
+  const drawing = doc.createElementNS(NS3, "g"), containers = doc.createElementNS(NS3, "g");
+  const paths = doc.createElementNS(NS3, "g"), objects = doc.createElementNS(NS3, "g");
+  drawing.append(containers, paths, objects);
+  const rendered = /* @__PURE__ */ new Map();
+  for (const n of model.nodes) {
+    let element;
+    if (n.isGroup) {
+      element = doc.createElementNS(NS3, "g");
+      const old = views.get(n.id)?.element;
+      element.id = old?.id || `${svg.id}-container-${rendered.size}`;
+      element.setAttribute("class", "statediagram-cluster");
+      const shape = doc.createElementNS(NS3, "rect");
+      for (const [k, v] of Object.entries({
+        x: n.x,
+        y: n.y,
+        width: n.width,
+        height: n.height,
+        rx: 12,
+        fill: n.shape === "divider" ? "none" : variables.clusterBkg || "#f7f9fc",
+        stroke: variables.flowchartNodeBorderColor,
+        "stroke-width": 1.5
+      })) shape.setAttribute(k, v);
+      if (n.shape === "divider") shape.setAttribute("stroke-dasharray", "5 5");
+      element.append(shape);
+      if (n.shape !== "divider") element.append(textLabel(
+        doc,
+        n.label,
+        n.x + n.width / 2,
+        n.y + 18,
+        variables.fontFamily,
+        variables.flowchartTextColor
+      ));
+      containers.append(element);
+    } else {
+      const view = views.get(n.id);
+      if (!view) throw new Error(`gpt-mermaid: missing visual model: ${n.id}`);
+      element = view.element;
+      element.setAttribute("transform", `translate(${n.x - view.box.x},${n.y - view.box.y}) ${view.transform}`);
+      if (n.kind === "label") {
+        element.id = `${svg.id}-condition-${rendered.size}`;
+        element.dataset.gptmLabelOwner = n.owner;
+      }
+      objects.append(element);
+    }
+    element.dataset.id = n.id;
+    element.dataset.gptmLayoutObject = n.kind;
+    if (n.parentId) element.dataset.gptmParent = n.parentId;
+    rendered.set(n.id, element);
+  }
+  const entries = [];
+  for (const relation of edges) {
+    const segments2 = model.segments.filter((s) => s.owner === relation.id);
+    const routes = segments2.map((s) => simplifyPoints(s.points));
+    for (const [index, segment] of segments2.entries()) {
+      const path = originalEdges.get(relation.id).cloneNode(false);
+      path.id = `${path.id}-segment-${index}`;
+      path.dataset.id = segment.id;
+      path.dataset.source = segment.source;
+      path.dataset.target = segment.target;
+      path.dataset.gptmEdgeOwner = relation.id;
+      path.dataset.gptmLogicalSource = relation.source;
+      path.dataset.gptmLogicalTarget = relation.target;
+      const route = routes[index];
+      path.removeAttribute("transform");
+      path.setAttribute("d", roundedPath(route, 5));
+      path.setAttribute("data-points", btoa(JSON.stringify(route)));
+      path.dataset.gptmSource = rendered.get(segment.source).id;
+      path.dataset.gptmTarget = rendered.get(segment.target).id;
+      path.dataset.gptmNativeRerouted = "true";
+      if (!segment.arrow) path.removeAttribute("marker-end");
+      if (relation.source === relation.target && index === 0) path.dataset.gptmSelfLoop = "true";
+      if (relation.label) {
+        const label = rendered.get(`${relation.id}:label`);
+        if (index === 0) label.dataset.gptmLabelEdge = path.id;
+        label.dataset.gptmLabelPorts = JSON.stringify({ incoming: routes[0].at(-1), outgoing: routes[1][0] });
+      }
+      paths.append(path);
+      entries.push({ path, relation: { ...segment, note: relation.note }, routes: [route] });
+    }
+  }
+  for (const start of [true, false]) {
+    const groups = /* @__PURE__ */ new Map();
+    for (const entry of entries) {
+      if (entry.relation.note) continue;
+      const route = start ? entry.routes[0] : entry.routes.at(-1).slice().reverse();
+      const p = route[0], q = route[1], length = distance2(p, q);
+      const key = `${start ? entry.relation.source : entry.relation.target}:${p.x}:${p.y}:${Math.round((q.x - p.x) / length)}:${Math.round((q.y - p.y) / length)}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(entry);
+    }
+    for (const group of groups.values()) if (group.length > 1) {
+      const owner = group[0].path.dataset.id;
+      for (const entry of group) entry.path.setAttribute(start ? "data-gptm-shared-start" : "data-gptm-shared-tip", owner);
+      if (!start) for (const entry of group.slice(1)) entry.path.removeAttribute("marker-end");
+    }
+  }
+  const definitions = [...svg.querySelectorAll("defs")].map((d) => d.cloneNode(true));
+  const markerDefinitions = [...svg.querySelectorAll("marker")].filter((m) => !m.closest("defs")).map((m) => m.cloneNode(true));
+  for (const child of [...svg.children]) if (child.localName === "g") child.remove();
+  for (const definition of definitions) {
+    const missing = [...definition.children].filter((child) => !child.id || !svg.getElementById(child.id));
+    if (missing.length) {
+      const defs = doc.createElementNS(NS3, "defs");
+      defs.append(...missing);
+      svg.append(defs);
+    }
+  }
+  if (markerDefinitions.length) {
+    const defs = doc.createElementNS(NS3, "defs");
+    defs.append(...markerDefinitions.filter((m) => !svg.getElementById(m.id)));
+    svg.append(defs);
+  }
+  svg.append(drawing);
+  svg.setAttribute("viewBox", `0 0 ${model.width} ${model.height}`);
+  svg.setAttribute("width", model.width);
+  svg.setAttribute("height", model.height);
+  svg.dataset.gptmStateLayout = "constraint-model";
+  svg.dataset.gptmNativeRoutes = String(model.segments.length);
+  svg.dataset.gptmLogicalEdges = String(edges.length);
+  svg.dataset.gptmStateNodes = String(nodes.filter((n) => n.shape !== "noteGroup").length);
+  svg.dataset.gptmStateLabels = String(edges.filter((e) => e.label).length);
+  svg.dataset.gptmStatePorts = String(quality.ports.length);
+  svg.dataset.gptmStateConstraints = quality.accepted ? "satisfied" : "crossings";
+  return quality;
+}
+var NS3, DIRECTION, distance2;
+var init_state_svg = __esm({
+  "src/state-svg.js"() {
+    init_state_layout();
+    init_state_constraints();
+    init_svg_routing();
+    init_runtime_guard();
+    NS3 = "http://www.w3.org/2000/svg";
+    DIRECTION = { TB: "DOWN", TD: "DOWN", BT: "UP", LR: "RIGHT", RL: "LEFT" };
+    distance2 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   }
 });
 
@@ -4335,8 +5170,8 @@ function layoutPoints(edge) {
   }
 }
 function nodeOutlines(svg) {
-  return [...svg.querySelectorAll("g.node, g.cluster, g.statediagram-cluster")].map((node) => {
-    const container = nodeShape(node);
+  return [...svg.querySelectorAll("g.node, g.cluster, g.statediagram-cluster, g.edgeLabel[data-gptm-label-owner]")].map((node) => {
+    const container = nodeShape(node) || node.querySelector("g.label rect.background,rect.labelBkg");
     if (!container) return null;
     const shape = container instanceof SVGGeometryElement ? container : container.querySelector("path,rect,polygon,circle,ellipse");
     if (!shape || typeof shape.isPointInFill !== "function") return null;
@@ -4377,19 +5212,19 @@ function contourIntersection(anchor, adjacent, outlines, authoritative = false) 
     return !contains({ x: anchor.x - vector2.x * 2, y: anchor.y - vector2.y * 2 }) && contains({ x: anchor.x + vector2.x * 2, y: anchor.y + vector2.y * 2 });
   }).sort((a, b) => a.box.width * a.box.height - b.box.width * b.box.height);
   for (const { box, contains, area } of candidates) {
-    const position = (distance2) => ({ x: anchor.x + vector2.x * distance2, y: anchor.y + vector2.y * distance2 });
-    const inside = (distance2) => area(position(distance2));
+    const position = (distance3) => ({ x: anchor.x + vector2.x * distance3, y: anchor.y + vector2.y * distance3 });
+    const inside = (distance3) => area(position(distance3));
     const reach = Math.max(4, Math.abs(vector2.x) * box.width + Math.abs(vector2.y) * box.height);
     let outside = -2;
     if (inside(outside)) continue;
     let hit = null;
     for (let step = 0; step <= 96; step++) {
-      const distance2 = -2 + (reach + 2) * step / 96;
-      if (inside(distance2)) {
-        hit = distance2;
+      const distance3 = -2 + (reach + 2) * step / 96;
+      if (inside(distance3)) {
+        hit = distance3;
         break;
       }
-      outside = distance2;
+      outside = distance3;
     }
     if (hit === null) continue;
     for (let iteration = 0; iteration < 20; iteration++) {
@@ -4497,7 +5332,7 @@ function repairSequenceConnections(svg) {
     }
   }
 }
-function attachForGeometry(svg, callback) {
+async function attachForGeometry(svg, callback) {
   if (typeof document === "undefined" || !document.body) return null;
   const host = document.createElement("div");
   host.setAttribute("aria-hidden", "true");
@@ -4510,12 +5345,12 @@ function attachForGeometry(svg, callback) {
   host.append(live);
   document.body.append(host);
   try {
-    return callback(live);
+    return await callback(live);
   } finally {
     host.remove();
   }
 }
-function postProcessSvg(svgMarkup, variables, graph, config = {}) {
+async function postProcessSvg(svgMarkup, variables, graph, config = {}) {
   const doc = new DOMParser().parseFromString(svgMarkup, "image/svg+xml");
   const svg = doc.documentElement;
   if (doc.querySelector("parsererror") || svg?.localName !== "svg") return svgMarkup;
@@ -4568,22 +5403,27 @@ function postProcessSvg(svgMarkup, variables, graph, config = {}) {
   for (const node of svg.querySelectorAll("g.node")) {
     if (node.classList.contains("mermaid-decision")) ensureCssClass(node, "mgpt-decision");
   }
-  const measured = attachForGeometry(svg, (live) => {
+  const measured = await attachForGeometry(svg, async (live) => {
     fixSvgLabels(live, variables);
-    if (graph?.edges) {
-      applyAdaptiveFlowLayout(live, graph, config.adaptiveLayout);
-      routeFlowEdges(live, graph);
-    }
-    routeC4Edges(live, graph, variables);
-    routeNativeEdges(live);
-    repairEdgeConnections(live);
-    repairSequenceConnections(live);
-    placeEdgeLabels(live);
-    resolveEdgeCrossings(live, repairEdgeConnections);
-    if (live.classList?.contains("statediagram")) {
+    if (graph?.state) {
+      await layoutStateSvg(live, graph.state, graph.layout, variables, config.signal);
+      repairEdgeConnections(live);
+    } else {
+      if (graph?.edges) {
+        applyAdaptiveFlowLayout(live, graph, config.adaptiveLayout);
+        routeFlowEdges(live, graph);
+      }
+      routeC4Edges(live, graph, variables);
       routeNativeEdges(live);
       repairEdgeConnections(live);
+      repairSequenceConnections(live);
       placeEdgeLabels(live);
+      resolveEdgeCrossings(live, repairEdgeConnections);
+      if (live.classList?.contains("statediagram")) {
+        routeNativeEdges(live);
+        repairEdgeConnections(live);
+        placeEdgeLabels(live);
+      }
     }
     if (graph || Number(live.getAttribute("data-gptm-native-routes")) > 0 || live.hasAttribute("data-gptm-planar-layout") || Number(live.getAttribute("data-gptm-spacing-factor")) > 1) fitSvgBounds(live);
     colorDirectionalEdges(live, variables);
@@ -4595,60 +5435,18 @@ function postProcessSvg(svgMarkup, variables, graph, config = {}) {
   });
   return measured || new XMLSerializer().serializeToString(svg);
 }
-function absoluteRuntimeUrl(config, baseUrl2) {
-  const raw = config.runtimeUrl || "gpt-mermaid.runtime.min.js";
-  try {
-    return new URL(raw, config.baseUrl || baseUrl2 || document.baseURI).href;
-  } catch {
-    return raw;
+function runtimeState(runtime) {
+  let state = runtimeStates.get(runtime);
+  if (!state) {
+    state = { queue: createSerialScheduler(), configKey: null };
+    runtimeStates.set(runtime, state);
   }
+  return state;
 }
-function loadScript(url) {
-  const existing = [...document.querySelectorAll("script[data-gpt-mermaid-runtime]")].find((script) => script.dataset.gptMermaidRuntime === url);
-  if (existing) {
-    return existing.dataset.loaded === "true" ? Promise.resolve() : new Promise((resolve, reject) => {
-      existing.addEventListener("load", resolve, { once: true });
-      existing.addEventListener("error", () => reject(new Error("gpt-mermaid: failed to load runtime")), { once: true });
-    });
-  }
-  return new Promise((resolve, reject) => {
-    const script = document.createElement("script");
-    script.src = url;
-    script.async = true;
-    script.dataset.gptMermaidRuntime = url;
-    script.addEventListener("load", () => {
-      script.dataset.loaded = "true";
-      resolve();
-    }, { once: true });
-    script.addEventListener("error", () => reject(new Error(`gpt-mermaid: failed to load ${url}`)), { once: true });
-    document.head.append(script);
-  });
-}
-function createRenderer(baseUrl2 = document.baseURI) {
-  let runtimePromise = null;
-  const renderQueue = createSerialScheduler();
+function createRenderer(baseUrl2 = globalThis.document?.baseURI) {
   let sequence = 0;
-  let initialized = false;
-  let configKey = "";
-  async function runtime(config = {}, signal) {
-    throwIfAborted(signal);
-    if (config.runtime && typeof config.runtime.render === "function") return config.runtime;
-    if (globalThis.mermaid?.render) return globalThis.mermaid;
-    if (!runtimePromise) {
-      const url = absoluteRuntimeUrl(config, baseUrl2);
-      runtimePromise = loadScript(url).then(() => {
-        if (!globalThis.mermaid?.render) throw new Error("gpt-mermaid: runtime did not expose window.mermaid");
-        return globalThis.mermaid;
-      }).catch((error) => {
-        runtimePromise = null;
-        throw error;
-      });
-    }
-    return withAbortTimeout(runtimePromise, {
-      signal,
-      timeoutMs: positiveTimeout(config.runtimeTimeoutMs, DEFAULT_RUNTIME_TIMEOUT_MS),
-      timeoutMessage: "gpt-mermaid: runtime load timed out"
-    });
+  function runtime(config = {}, signal) {
+    return loadRuntime(config, baseUrl2, signal);
   }
   function initialize(mermaid, config, flowchart, stateDiagram) {
     const layout = flowchart ? "elk" : "dagre";
@@ -4659,7 +5457,8 @@ function createRenderer(baseUrl2 = document.baseURI) {
       layout,
       state: stateDiagram ? "wide" : "default"
     });
-    if (initialized && configKey === nextKey) return;
+    const state = runtimeState(mermaid);
+    if (state.configKey === nextKey) return;
     mermaid.initialize({
       startOnLoad: false,
       securityLevel: "strict",
@@ -4702,8 +5501,7 @@ function createRenderer(baseUrl2 = document.baseURI) {
       architecture: { useMaxWidth: false },
       radar: { useMaxWidth: false }
     });
-    initialized = true;
-    configKey = nextKey;
+    state.configKey = nextKey;
   }
   async function renderSvg(rawSource, config = {}) {
     const source = sanitizeMermaidSource(rawSource);
@@ -4712,19 +5510,21 @@ function createRenderer(baseUrl2 = document.baseURI) {
       config.renderTimeoutMs ?? config.timeoutMs,
       DEFAULT_RENDER_TIMEOUT_MS
     );
+    const mermaid = await runtime(config, config.signal);
+    const renderQueue = runtimeState(mermaid).queue;
     return renderQueue.schedule(async (signal) => {
       throwIfAborted(signal);
       const flowchart = isFlowchart(source);
       const stateDiagram = isStateDiagram(source);
-      const mermaid = await runtime(config, signal);
-      throwIfAborted(signal);
       initialize(mermaid, config, flowchart, stateDiagram);
       const id = `mgpt-${Date.now().toString(36)}-${++sequence}`;
       const result = await mermaid.render(id, source);
       throwIfAborted(signal);
       if (!result?.svg) throw new Error("gpt-mermaid: renderer returned no SVG");
       let graph;
-      if (mermaid.mermaidAPI?.getDiagramFromText && (flowchart || /^\s*C4\w+/m.test(source))) {
+      if (stateDiagram && result.gptMermaidStateModel) {
+        graph = { state: result.gptMermaidStateModel, layout: mermaid.gptMermaidLayout };
+      } else if (mermaid.mermaidAPI?.getDiagramFromText && (flowchart || /^\s*C4\w+/m.test(source))) {
         const diagram = await mermaid.mermaidAPI.getDiagramFromText(source);
         throwIfAborted(signal);
         if (flowchart && diagram.db.getData) graph = { ...diagram.db.getData(), direction: diagram.db.getDirection() };
@@ -4736,7 +5536,7 @@ function createRenderer(baseUrl2 = document.baseURI) {
         const style = `<style id="mgpt-global-theme">${themeCSS}</style>`;
         svg = svg.replace(/<svg\b[^>]*>/, (tag) => `${tag}${style}`);
       }
-      const processed = postProcessSvg(svg, config.themeVariables, graph, config);
+      const processed = await postProcessSvg(svg, config.themeVariables, graph, { ...config, signal });
       throwIfAborted(signal);
       const clean = sanitizeSvgMarkup(processed);
       const size = svgSize(clean);
@@ -4766,7 +5566,7 @@ function createRenderer(baseUrl2 = document.baseURI) {
   }
   return { renderSvg, load, postProcessSvg };
 }
-var FLOWCHART_RE, FRONTMATTER_FENCE_RE, DIRECTION_KEYS, TRIANGLE_MARKER_RE, TRIANGLE_ASPECT, CONNECTED_EDGE_SELECTOR, PATH_NUMBER;
+var FLOWCHART_RE, FRONTMATTER_FENCE_RE, DIRECTION_KEYS, TRIANGLE_MARKER_RE, TRIANGLE_ASPECT, CONNECTED_EDGE_SELECTOR, PATH_NUMBER, runtimeStates;
 var init_render = __esm({
   "src/render.js"() {
     init_defaults();
@@ -4778,6 +5578,8 @@ var init_render = __esm({
     init_svg_adaptive();
     init_svg_crossings();
     init_runtime_guard();
+    init_runtime_loader();
+    init_state_svg();
     FLOWCHART_RE = /^\s*(?:flowchart|graph)\b/im;
     FRONTMATTER_FENCE_RE = /^---\s*$/;
     DIRECTION_KEYS = Object.freeze({
@@ -4790,6 +5592,7 @@ var init_render = __esm({
     TRIANGLE_ASPECT = 1.25;
     CONNECTED_EDGE_SELECTOR = ".flowchart-link, .relation, .relationshipLine, .transition";
     PATH_NUMBER = String.raw`[-+]?(?:\d*\.\d+|\d+\.?\d*)(?:[eE][-+]?\d+)?`;
+    runtimeStates = /* @__PURE__ */ new WeakMap();
   }
 });
 
@@ -4797,7 +5600,7 @@ var init_render = __esm({
 function icon(doc, name) {
   const shapes = ICONS[name];
   if (!shapes) return null;
-  const svg = doc.createElementNS(NS3, "svg");
+  const svg = doc.createElementNS(NS4, "svg");
   svg.setAttribute("class", "mgpt-icon");
   svg.setAttribute("viewBox", "0 0 24 24");
   svg.setAttribute("fill", "none");
@@ -4807,7 +5610,7 @@ function icon(doc, name) {
   svg.setAttribute("stroke-linejoin", "round");
   svg.setAttribute("aria-hidden", "true");
   for (const [tag, attrs] of shapes) {
-    const node = doc.createElementNS(NS3, tag);
+    const node = doc.createElementNS(NS4, tag);
     for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
     svg.append(node);
   }
@@ -5130,10 +5933,10 @@ function createUi({ renderSvg, getConfig }) {
         const active = gesture.ids.map((id) => pointers.get(id));
         const x = active.reduce((sum, p) => sum + p.x, 0) / active.length;
         const y = active.reduce((sum, p) => sum + p.y, 0) / active.length;
-        const distance2 = active.length === 2 ? Math.hypot(active[1].x - active[0].x, active[1].y - active[0].y) : 0;
-        const ratio = gesture.distance > 1 ? distance2 / gesture.distance : 1;
+        const distance3 = active.length === 2 ? Math.hypot(active[1].x - active[0].x, active[1].y - active[0].y) : 0;
+        const ratio = gesture.distance > 1 ? distance3 / gesture.distance : 1;
         zoom(record, gesture.fromZoom * ratio, false, { ...gesture, toX: x, toY: y });
-        if (gesture && gesture.distance <= 1 && distance2 > 1) rebase();
+        if (gesture && gesture.distance <= 1 && distance3 > 1) rebase();
       },
       end(event) {
         const active = gesture?.ids.includes(event.pointerId);
@@ -5436,10 +6239,10 @@ function createUi({ renderSvg, getConfig }) {
       external?.removeEventListener?.("abort", forwardAbort);
     }
   }
-  function createRecord(source, sourceElement, options) {
-    const doc = options.document || sourceElement?.ownerDocument || document;
+  function createRecord(source, sourceElement, options2) {
+    const doc = options2.document || sourceElement?.ownerDocument || document;
     const state = uiState(doc);
-    const config = getConfig(options);
+    const config = getConfig(options2);
     const figure = doc.createElement("figure");
     figure.className = "mgpt-diagram";
     figure.dataset.gptMermaid = "";
@@ -5573,10 +6376,10 @@ function createUi({ renderSvg, getConfig }) {
     record.expand = () => viewer(state, record);
     return record;
   }
-  async function mount(target, source, options = {}) {
+  async function mount(target, source, options2 = {}) {
     const doc = target?.ownerDocument || document;
-    const sourceElement = options.sourceElement || null;
-    const record = createRecord(source, sourceElement, { ...options, document: doc });
+    const sourceElement = options2.sourceElement || null;
+    const record = createRecord(source, sourceElement, { ...options2, document: doc });
     if (sourceElement) {
       sourceElement.hidden = true;
       record.figure.append(sourceElement);
@@ -5622,7 +6425,7 @@ function createUi({ renderSvg, getConfig }) {
       }, timeoutMs);
     });
   }
-  function renderAll(root = document, options = {}) {
+  function renderAll(root = document, options2 = {}) {
     const doc = root.ownerDocument || root;
     const diagrams = [];
     const codeBlocks = [...root.querySelectorAll("pre > code.language-mermaid, pre > code.lang-mermaid")];
@@ -5630,7 +6433,7 @@ function createUi({ renderSvg, getConfig }) {
       if (code.closest("[data-gpt-mermaid]")) continue;
       const pre = code.parentElement;
       const source = code.textContent || "";
-      const record = createRecord(source, pre, { ...options, document: doc });
+      const record = createRecord(source, pre, { ...options2, document: doc });
       pre.replaceWith(record.figure);
       pre.hidden = true;
       record.figure.append(pre);
@@ -5641,7 +6444,7 @@ function createUi({ renderSvg, getConfig }) {
     for (const target of root.querySelectorAll("[data-gpt-mermaid-source]")) {
       if (target.closest("[data-gpt-mermaid]")) continue;
       const source = target.dataset.source || target.textContent || "";
-      const record = createRecord(source, null, { ...options, document: doc });
+      const record = createRecord(source, null, { ...options2, document: doc });
       target.replaceWith(record.figure);
       record.figure.addEventListener("click", (event) => handleClick(uiState(doc), event));
       void renderRecord(record);
@@ -5651,11 +6454,11 @@ function createUi({ renderSvg, getConfig }) {
   }
   return { mount, renderAll, handleClick, uiState, closeMenus, svgToPng };
 }
-var NS3, SCROLL_LOCK_CLASS, MENU_ITEM_SELECTOR, INLINE_STAGE_MAX_HEIGHT, INLINE_STAGE_MIN_HEIGHT, ICONS;
+var NS4, SCROLL_LOCK_CLASS, MENU_ITEM_SELECTOR, INLINE_STAGE_MAX_HEIGHT, INLINE_STAGE_MIN_HEIGHT, ICONS;
 var init_ui = __esm({
   "src/ui.js"() {
     init_runtime_guard();
-    NS3 = "http://www.w3.org/2000/svg";
+    NS4 = "http://www.w3.org/2000/svg";
     SCROLL_LOCK_CLASS = "mgpt-scroll-locked";
     MENU_ITEM_SELECTOR = '[role="menuitem"]:not(:disabled)';
     INLINE_STAGE_MAX_HEIGHT = 720;
@@ -5725,45 +6528,48 @@ function createGPTMermaid(globalObject, baseUrl2) {
   let config = resolveConfig({}, DEFAULT_CONFIG);
   const renderer = createRenderer(baseUrl2 || globalObject.document?.baseURI || "http://localhost/");
   const ui = createUi({
-    renderSvg: (source, options) => renderer.renderSvg(source, resolveConfig(options, config)),
-    getConfig: (options) => resolveConfig(options, config)
+    renderSvg: (source, options2) => renderer.renderSvg(source, resolveConfig(options2, config)),
+    getConfig: (options2) => resolveConfig(options2, config)
   });
   function configure(next = {}) {
     config = resolveConfig(next, config);
     if (globalObject.document) injectStyles(globalObject.document, config.autoInjectStyles);
     return { ...config, themeVariables: { ...config.themeVariables } };
   }
-  async function renderSvg(source, options = {}) {
-    const effective = resolveConfig(options, config);
+  async function renderSvg(source, options2 = {}) {
+    const effective = resolveConfig(options2, config);
     if (globalObject.document) injectStyles(globalObject.document, effective.autoInjectStyles);
     return renderer.renderSvg(source, effective);
   }
-  async function mount(target, source, options = {}) {
-    const effective = resolveConfig(options, config);
+  function load(options2 = {}) {
+    return renderer.load(resolveConfig(options2, config));
+  }
+  async function mount(target, source, options2 = {}) {
+    const effective = resolveConfig(options2, config);
     if (globalObject.document) injectStyles(globalObject.document, effective.autoInjectStyles);
     const element = typeof target === "string" ? globalObject.document.querySelector(target) : target;
     if (!element) throw new Error(`gpt-mermaid: mount target not found: ${target}`);
-    return ui.mount(element, source, { ...effective, ...options });
+    return ui.mount(element, source, { ...effective, ...options2 });
   }
-  async function render(source, options = {}) {
-    if (options.target || options.container) {
-      return mount(options.target || options.container, source, options);
+  async function render(source, options2 = {}) {
+    if (options2.target || options2.container) {
+      return mount(options2.target || options2.container, source, options2);
     }
     const target = globalObject.document.createElement("div");
     globalObject.document.body.append(target);
-    return mount(target, source, options);
+    return mount(target, source, options2);
   }
-  function renderAll(root = globalObject.document, options = {}) {
-    if (globalObject.document) injectStyles(globalObject.document, resolveConfig(options, config).autoInjectStyles);
-    return ui.renderAll(root, { ...resolveConfig(options, config), ...options });
+  function renderAll(root = globalObject.document, options2 = {}) {
+    if (globalObject.document) injectStyles(globalObject.document, resolveConfig(options2, config).autoInjectStyles);
+    return ui.renderAll(root, { ...resolveConfig(options2, config), ...options2 });
   }
-  function autoRender(options = {}) {
+  function autoRender(options2 = {}) {
     if (globalObject.document?.readyState === "loading") {
       return new Promise((resolve) => {
-        globalObject.document.addEventListener("DOMContentLoaded", () => resolve(renderAll(globalObject.document, options)), { once: true });
+        globalObject.document.addEventListener("DOMContentLoaded", () => resolve(renderAll(globalObject.document, options2)), { once: true });
       });
     }
-    return renderAll(globalObject.document, options);
+    return renderAll(globalObject.document, options2);
   }
   function destroy(record) {
     if (record?.destroy) record.destroy();
@@ -5772,6 +6578,7 @@ function createGPTMermaid(globalObject, baseUrl2) {
     version: VERSION,
     presets: PRESETS,
     configure,
+    load,
     renderSvg,
     sanitizeSource: sanitizeMermaidSource,
     sanitizeSvg: sanitizeSvgMarkup,

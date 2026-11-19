@@ -10,6 +10,8 @@ const config: GPTMermaidConfig = {
 };
 const typed: GPTMermaid.GPTMermaidApi = GPTMermaid;
 typed.configure(config);
+const loaded: Promise<GPTMermaid.GPTMermaidRuntime> = typed.load(config);
+void loaded.then((runtime) => typed.load({ runtime }));
 void typed.renderSvg("flowchart LR\nA --> B", config);
 void typed.render("flowchart LR\nA --> B", { ...config, target: "#diagram" });
 void typed.renderAll(document, config);

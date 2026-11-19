@@ -5,6 +5,7 @@ import GPTMermaid, {
   renderSvg,
   version,
   type GPTMermaidConfig,
+  type GPTMermaidRuntime,
 } from "gpt-mermaid";
 
 const controller = new AbortController();
@@ -15,6 +16,10 @@ const config: GPTMermaidConfig = {
   runtimeTimeoutMs: 15_000,
 };
 GPTMermaid.configure(config);
+const loaded: Promise<GPTMermaidRuntime> = GPTMermaid.load(config);
+void loaded.then((runtime) => GPTMermaid.load({ runtime }));
+// @ts-expect-error 显式运行库必须有 initialize 与 render 两种能力。
+void GPTMermaid.load({ runtime: { render: async () => ({ svg: "<svg/>" }) } });
 void renderSvg("flowchart LR\nA --> B", config);
 void mount("#diagram", "flowchart LR\nA --> B", config);
 void render("flowchart LR\nA --> B", { ...config, target: "#diagram" });

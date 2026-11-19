@@ -16,6 +16,7 @@ import { verifyPracticalVariants } from "./practical-variants.mjs";
 import { verifyTouchGestures } from "./touch-gestures.mjs";
 import { BASE_GEOMETRY_EXPECTATIONS } from "./geometry-expectations.mjs";
 import { inspectStatePorts } from "./state-ports.mjs";
+import { inspectStateLayout } from "./state-layout-geometry.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.GPT_MERMAID_TEST_PORT || 4173);
@@ -154,24 +155,31 @@ DONE --> DISABLED: 使能置 0`;
       Math.max(box.left - point.x, 0, point.x - box.right),
       Math.max(box.top - point.y, 0, point.y - box.bottom),
     ) : Infinity;
-    const stateEdgeState = [...stateHost.querySelectorAll("path.transition[data-source]")].map((edge) => {
-      const length = edge.getTotalLength(), matrix = edge.getScreenCTM();
-      const startPoint = edge.getPointAtLength(0), endPoint = edge.getPointAtLength(length);
+    const stateGroups = new Map();
+    for (const edge of stateHost.querySelectorAll("path.transition[data-source]")) {
+      const owner = edge.dataset.gptmEdgeOwner || edge.dataset.id;
+      if (!stateGroups.has(owner)) stateGroups.set(owner, []);
+      stateGroups.get(owner).push(edge);
+    }
+    const stateEdgeState = [...stateGroups].map(([owner, parts]) => {
+      const edge = parts[0], last = parts.at(-1), length = last.getTotalLength(), matrix = edge.getScreenCTM();
+      const startPoint = edge.getPointAtLength(0), endPoint = last.getPointAtLength(length);
       const start = new DOMPoint(startPoint.x, startPoint.y).matrixTransform(matrix);
       const end = new DOMPoint(endPoint.x, endPoint.y).matrixTransform(matrix);
-      const label = stateHost.querySelector(`g.edgeLabel [data-id="${edge.dataset.id}"]`)?.parentElement?.textContent.trim() || "";
+      const label = stateHost.querySelector(`g.edgeLabel[data-gptm-label-owner="${owner}"]`)?.textContent.trim() || "";
       let points = [];
-      try { points = JSON.parse(atob(edge.getAttribute("data-points") || "")); } catch {}
-      const legs = points.slice(1).map((point, index) => Math.hypot(point.x - points[index].x, point.y - points[index].y));
+      try { points = parts.flatMap((p,index) => JSON.parse(atob(p.getAttribute("data-points") || ""))
+        .map((v,j)=>({...v,...(index&&!j?{move:true}:{})}))); } catch {}
+      const legs = points.slice(1).flatMap((point, index) => point.move ? [] : [Math.hypot(point.x - points[index].x, point.y - points[index].y)]);
       return {
-        id: edge.dataset.id, source: edge.dataset.source, target: edge.dataset.target, label,
-        sourceGap: stateDistance(stateNodes.get(edge.dataset.source), start),
-        targetGap: stateDistance(stateNodes.get(edge.dataset.target), end),
-        targetTopGap: Math.abs(end.y - stateNodes.get(edge.dataset.target).top),
+        id: owner, source: edge.dataset.gptmLogicalSource || edge.dataset.source, target: last.dataset.gptmLogicalTarget || last.dataset.target, label,
+        sourceGap: stateDistance(stateNodes.get(edge.dataset.gptmLogicalSource || edge.dataset.source), start),
+        targetGap: stateDistance(stateNodes.get(last.dataset.gptmLogicalTarget || last.dataset.target), end),
+        targetTopGap: Math.abs(end.y - stateNodes.get(last.dataset.gptmLogicalTarget || last.dataset.target).top),
         rerouted: edge.hasAttribute("data-gptm-native-rerouted"),
-        bends: Math.max(0, points.length - 2), minLeg: legs.length ? Math.min(...legs) : 0,
+        bends: Math.max(0, points.length - 2 - points.filter(p => p.move).length * 2), minLeg: legs.length ? Math.min(...legs) : 0,
         orthogonal: points.slice(1).every((point, index) =>
-          Math.abs(point.x - points[index].x) < 0.75 || Math.abs(point.y - points[index].y) < 0.75),
+          point.move || Math.abs(point.x - points[index].x) < 0.75 || Math.abs(point.y - points[index].y) < 0.75),
       };
     });
     const stateRouting = {
@@ -262,15 +270,22 @@ DONE --> DISABLED: 使能置 0`;
   assert.equal(programmatic.stateGeometry.border, "rgb(91, 143, 189)");
   assert.equal(programmatic.stateGeometry.borderWidth, "1.5px");
   assert.equal(programmatic.stateRouting.edges.length, 10, JSON.stringify(programmatic.stateRouting));
-  assert.equal(programmatic.stateRouting.nativeRoutes, 10, JSON.stringify(programmatic.stateRouting));
+  assert.equal(programmatic.stateRouting.nativeRoutes, 19, JSON.stringify(programmatic.stateRouting));
   const centeredPorts = await page.evaluate(inspectStatePorts, programmatic.stateSvg);
-  assert.equal(centeredPorts.length, 10);
+  assert.equal(centeredPorts.length, 19, "10条业务边含9个条件框，共19段显示线");
   for (const edge of centeredPorts) for (const port of edge.endpoints) {
     assert(port.middleError < 0.1 && port.contourGap < 1, `端口必须在声明框的边中点：${JSON.stringify({ edge, port })}`);
     assert(port.controlLead >= 40 - 0.05 && port.normalError < 0.1,
       `框外必须保留32单位可见直线后再转弯：${JSON.stringify({ edge, port })}`);
   }
   await fs.writeFile(path.join(output, "centered-ports-report.json"), JSON.stringify(centeredPorts, null, 2));
+  const completeState = await page.evaluate(inspectStateLayout, programmatic.stateSvg);
+  assert.equal(completeState.nodes, 7);
+  assert.equal(completeState.logicalEdges, 10);
+  assert.equal(completeState.labels.length, 9);
+  assert.equal(completeState.ports.length, 38);
+  assert.deepEqual(completeState.issues, [], "所有状态框和条件框须满足中点、直段及避障");
+  await fs.writeFile(path.join(output, "state-layout-geometry.json"), JSON.stringify(completeState, null, 2));
   assert.equal(programmatic.stateRouting.status, "clear", JSON.stringify(programmatic.stateRouting));
   assert.equal(programmatic.stateRouting.crossings, 0, JSON.stringify(programmatic.stateRouting));
   const enabledEdge = programmatic.stateRouting.edges.find(edge =>
@@ -452,7 +467,10 @@ Charge --> Pack[Pack order] --> Ship[Ship parcel] --> Deliver[Confirm delivery] 
   const stateGalleryPorts = [];
   for (const sample of stateGallery) {
     const ports = await page.evaluate(inspectStatePorts, sample.svg);
-    assert.equal(ports.length, expectedStateEdges[sample.id], sample.id);
+    const geometry = await page.evaluate(inspectStateLayout, sample.svg);
+    assert.equal(geometry.logicalEdges, expectedStateEdges[sample.id], `${sample.id} 业务关系不能变化`);
+    assert.equal(ports.length, geometry.logicalEdges + geometry.labels.length, `${sample.id} 条件框必须连接两段线`);
+    assert.deepEqual(geometry.issues, [], `${sample.id} 全框几何约束`);
     for (const edge of ports) {
       assert(edge.sharedArrowValid, `共享箭头与实际末段不一致：${sample.id} ${edge.id}`);
       for (const port of edge.endpoints) {
@@ -462,7 +480,7 @@ Charge --> Pack[Pack order] --> Ship[Ship parcel] --> Deliver[Confirm delivery] 
           `状态图首尾直线不足：${sample.id} ${JSON.stringify({edge,port})}`);
       }
     }
-    stateGalleryPorts.push({id:sample.id,ports});
+    stateGalleryPorts.push({id:sample.id,ports,logicalEdges:geometry.logicalEdges,labels:geometry.labels});
   }
   await fs.writeFile(path.join(output, "state-gallery-ports.json"), JSON.stringify(stateGalleryPorts, null, 2));
   const details = await auditDetailOverlaps(page, path.join(output, "playwright", "detail-audit"), true, BASE_GEOMETRY_EXPECTATIONS);

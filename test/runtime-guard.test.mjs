@@ -116,7 +116,7 @@ test("queued tasks cancel immediately and never start", async () => {
   assert.equal(scheduler.pending(), 2);
   controller.abort("queued cancel");
   await assert.rejects(cancelled, (error) => error.name === "AbortError");
-  assert.equal(scheduler.pending(), 2, "the cancelled item is skipped when its turn arrives");
+  assert.equal(scheduler.pending(), 1, "cancelled items must leave the queue immediately");
   firstGate.resolve();
   assert.equal(await first, "first");
   assert.equal(await third, "third");
@@ -124,20 +124,60 @@ test("queued tasks cancel immediately and never start", async () => {
   assert.equal(scheduler.pending(), 0);
 });
 
-test("a timed-out task releases the serial slot for the next task", async () => {
+test("a timed-out execution retains its slot until actual settlement", async () => {
   const scheduler = createSerialScheduler();
   const events = [];
-  const timed = scheduler.schedule(() => new Promise(() => {
+  const gate = deferred();
+  const timed = scheduler.schedule(async () => {
     events.push("slow:start");
-  }), { timeoutMs: 15, timeoutMessage: "queue timeout" });
+    await gate.promise;
+    events.push("slow:end");
+  }, { timeoutMs: 15, timeoutMessage: "execution timeout" });
   const next = scheduler.schedule(async () => {
     events.push("next:start");
     return "next";
   }, { timeoutMs: 1000 });
 
-  await assert.rejects(timed, (error) => error.name === "TimeoutError" && error.message === "queue timeout");
+  await assert.rejects(timed, (error) => error.name === "TimeoutError" && error.message === "execution timeout");
+  assert.deepEqual(events, ["slow:start"]);
+  assert.ok(scheduler.active());
+  gate.resolve();
   assert.equal(await next, "next");
-  assert.deepEqual(events, ["slow:start", "next:start"]);
+  assert.deepEqual(events, ["slow:start", "slow:end", "next:start"]);
+});
+
+test("a permanently hung execution cannot leave queued callers waiting forever", async () => {
+  const scheduler = createSerialScheduler();
+  let nextStarted = false;
+  const hung = scheduler.schedule(() => new Promise(() => {}), { timeoutMs: 10 });
+  const hungFailure = assert.rejects(hung, (error) => error.name === "TimeoutError");
+  const next = scheduler.schedule(() => { nextStarted = true; }, { timeoutMs: 20 });
+  await assert.rejects(next, /render queue timed out/);
+  await hungFailure;
+  assert.equal(nextStarted, false);
+  assert.equal(scheduler.pending(), 0);
+  assert.ok(scheduler.active(), "a timeout is not evidence that execution has stopped");
+});
+
+test("aborting a non-cooperative task also retains the slot until actual settlement", async () => {
+  const scheduler = createSerialScheduler();
+  const controller = new AbortController();
+  const gate = deferred();
+  const events = [];
+  const active = scheduler.schedule(async () => {
+    events.push("old:start");
+    await gate.promise;
+    events.push("old:end");
+  }, { signal: controller.signal });
+  const failure = assert.rejects(active, (error) => error.name === "AbortError");
+  const next = scheduler.schedule(() => events.push("new:start"));
+  await tick();
+  controller.abort();
+  await failure;
+  assert.deepEqual(events, ["old:start"]);
+  gate.resolve();
+  await next;
+  assert.deepEqual(events, ["old:start", "old:end", "new:start"]);
 });
 
 test("active task receives abort and the next queued task still runs", async () => {

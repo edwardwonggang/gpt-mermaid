@@ -2,8 +2,8 @@
  * 职责：为运行时长、中止信号和串行渲染提供统一保护。
  * 调用方：render.js（加载/渲染队列）与 ui.js（等待超时）。
  * 依赖：浏览器或 Node 20+ 的 AbortController、Promise、setTimeout。
- * 红线：超时只负责结束等待并给出明确错误；底层不响应 signal 的第三方任务
- *       可能仍会完成，但队列不能被一个永不 settle 的 Promise 永久卡住。
+ * 红线：超时只结束等待，不证明第三方执行已结束；真实执行 settle 前不能交出
+ *       串行槽位。排队也必须有截止时间，挂死任务不能让其它调用者永久等待。
  */
 
 export const DEFAULT_RENDER_TIMEOUT_MS = 12000;
@@ -72,27 +72,28 @@ export function withAbortTimeout(value, {
 }
 
 /**
- * 严格串行的调度器。任务只有在前一项 settle 或命中超时后才会启动，
- * 排队中的任务可通过 signal 立即撤销。
+ * 严格串行的调度器。只有真实任务 settle 才释放槽位；取消/超时后迟到的
+ * 任务仍占槽，但其调用者已结束等待。排队预算和执行预算分别计时。
  */
 export function createSerialScheduler() {
   const queue = [];
-  let running = false;
   let active = null;
 
   function schedule(run, {
     signal,
     timeoutMs = DEFAULT_RENDER_TIMEOUT_MS,
     timeoutMessage,
+    queueTimeoutMs = timeoutMs,
   } = {}) {
     return new Promise((resolve, reject) => {
       const item = {
         run, signal, timeoutMs, timeoutMessage, resolve, reject,
-        controller: new AbortController(), started: false, cancelled: false, onExternalAbort: null,
+        controller: new AbortController(), started: false, queueTimer: null, onExternalAbort: null,
       };
       const cancelQueued = (reason) => {
-        if (item.cancelled) return;
-        item.cancelled = true;
+        const index = queue.indexOf(item);
+        if (index !== -1) queue.splice(index, 1);
+        clearTimeout(item.queueTimer);
         item.signal?.removeEventListener?.("abort", item.onExternalAbort);
         reject(reason instanceof Error ? reason : abortError(undefined, reason));
       };
@@ -107,38 +108,36 @@ export function createSerialScheduler() {
       }
       signal?.addEventListener?.("abort", item.onExternalAbort, { once: true });
       queue.push(item);
-      void drain();
+      item.queueTimer = setTimeout(() => cancelQueued(timeoutError("gpt-mermaid: render queue timed out")),
+        positiveTimeout(queueTimeoutMs));
+      drain();
     });
   }
 
-  async function drain() {
-    if (running) return;
-    running = true;
-    try {
-      while (queue.length) {
-        const item = queue.shift();
-        if (item.cancelled) continue;
-        item.started = true;
-        active = item;
-        try {
-          const result = await withAbortTimeout(item.run(item.controller.signal), {
-            signal: item.signal,
-            timeoutMs: item.timeoutMs,
-            timeoutMessage: item.timeoutMessage,
-          });
-          item.resolve(result);
-        } catch (error) {
-          item.controller.abort(error);
-          item.reject(error);
-        } finally {
-          item.signal?.removeEventListener?.("abort", item.onExternalAbort);
-          active = null;
-        }
-      }
-    } finally {
-      running = false;
-      if (queue.length) void drain();
-    }
+  function drain() {
+    if (active || !queue.length) return;
+    const item = queue.shift();
+    clearTimeout(item.queueTimer);
+    item.started = true;
+    active = item;
+    const execution = Promise.resolve().then(() => {
+      throwIfAborted(item.controller.signal);
+      return item.run(item.controller.signal);
+    });
+    const release = () => {
+      active = null;
+      drain();
+    };
+    // 此处只能订阅真实执行结果，不能订阅下面被超时/取消截短的等待。
+    execution.then(release, release);
+    withAbortTimeout(execution, {
+      signal: item.controller.signal,
+      timeoutMs: positiveTimeout(item.timeoutMs),
+      timeoutMessage: item.timeoutMessage,
+    }).then(item.resolve, (error) => {
+      item.controller.abort(error);
+      item.reject(error);
+    }).finally(() => item.signal?.removeEventListener?.("abort", item.onExternalAbort));
   }
 
   return {

@@ -10,10 +10,11 @@ export function inspectStatePorts(markup) {
     const svg = host.querySelector("svg"), inverse = svg.getScreenCTM().inverse();
     const root = (element, point) => new DOMPoint(point.x, point.y)
       .matrixTransform(element.getScreenCTM()).matrixTransform(inverse);
-    const nodes = new Map([...svg.querySelectorAll("g.node[data-id],g.statediagram-cluster[data-id]")].map(node => {
+    const nodes = new Map([...svg.querySelectorAll("g.node[data-id],g.statediagram-cluster[data-id],g.edgeLabel[data-gptm-label-owner]")].map(node => {
       const shape = node.querySelector(":scope > .label-container,:scope > .outer-path,:scope > rect,:scope > circle,:scope > polygon,:scope > path")
         || [...node.children].find(child => child.localName === "g" && !child.classList.contains("label")
-          && child.querySelector("path,rect,circle,ellipse,polygon"));
+          && child.querySelector("path,rect,circle,ellipse,polygon"))
+        || node.querySelector("g.label rect.background,rect.labelBkg");
       if (!shape) return [node.dataset.id, null];
       const box = shape.getBBox(), p = root(shape, box), q = root(shape, { x: box.x + box.width, y: box.y + box.height });
       return [node.dataset.id, { x: p.x, y: p.y, right: q.x, bottom: q.y }];

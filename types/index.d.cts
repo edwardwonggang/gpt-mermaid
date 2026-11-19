@@ -4,6 +4,7 @@ import type {
   GPTMermaidConfig as Config,
   GPTMermaidDiagram as Diagram,
   GPTMermaidRenderResult as RenderResult,
+  GPTMermaidRuntime as Runtime,
 } from "./index.js";
 
 declare const GPTMermaid: Api;
@@ -13,6 +14,7 @@ declare namespace GPTMermaid {
   type GPTMermaidConfig = Config;
   type GPTMermaidDiagram = Diagram;
   type GPTMermaidRenderResult = RenderResult;
+  type GPTMermaidRuntime = Runtime;
 }
 
 export = GPTMermaid;

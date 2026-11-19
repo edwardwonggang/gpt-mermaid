@@ -65,6 +65,9 @@ const browserCoverage = new Set([
 const testFiles = walk(path.join(root, "test"))
   .filter((file) => file.endsWith(".mjs"))
   .sort();
+// node:test入口也会消费独立夹具；验证真实导入链，而非按fixtures目录全量豁免。
+const nodeCoverage = new Set(testFiles.filter(file => file.endsWith(".test.mjs"))
+  .flatMap(file => [...importClosure(relative(file))]));
 const unregistered = [];
 
 for (const file of testFiles) {
@@ -75,6 +78,7 @@ for (const file of testFiles) {
   if (base.endsWith(".test.mjs")) continue;
   if (nodeTest) continue;
   if (browserCoverage.has(file)) continue;
+  if (nodeCoverage.has(file)) continue;
   unregistered.push(rel);
 }
 

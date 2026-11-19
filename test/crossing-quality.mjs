@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { inspectStatePorts } from "./state-ports.mjs";
+import { inspectStateLayout } from "./state-layout-geometry.mjs";
 
 export async function verifyCrossingQuality(page, output) {
   const report = await page.evaluate(async () => {
@@ -41,8 +42,29 @@ Completed --> [*]`);
         const paths = [...svg.querySelectorAll(".flowchart-link,.transition,.relation,.relationshipLine,[data-gptm-source]")]
           .filter((e) => typeof e.getTotalLength === "function").map((edge) => {
             const length = edge.getTotalLength(), count = Math.max(2, Math.ceil(length / 1.3)), points = [];
-            for (let i = 0; i <= count; i++) {
-              const p = edge.getPointAtLength(length * i / count);
+            let samples;
+            if (edge.dataset.gptmEdgeOwner) {
+              // 统一状态路径为M/L/Q。相同公共圆角必须按相同参数采样，
+              // 按整条边弧长均分会把同一Q画成不同弦线，制造不存在的交点。
+              const tokens = edge.getAttribute("d").match(/[MLQ]|[-+]?(?:\d*\.)?\d+(?:e[-+]?\d+)?/gi);
+              samples = []; let current;
+              for (let index = 0; index < tokens.length;) {
+                const command = tokens[index++];
+                if (command === "M" || command === "L") {
+                  current = { x: Number(tokens[index++]), y: Number(tokens[index++]) }; samples.push(current);
+                } else if (command === "Q") {
+                  const control = { x: Number(tokens[index++]), y: Number(tokens[index++]) };
+                  const end = { x: Number(tokens[index++]), y: Number(tokens[index++]) };
+                  for (let step = 1; step <= 64; step++) {
+                    const t = step / 64, u = 1 - t;
+                    samples.push({ x: u*u*current.x + 2*u*t*control.x + t*t*end.x,
+                      y: u*u*current.y + 2*u*t*control.y + t*t*end.y });
+                  }
+                  current = end;
+                } else throw new Error("状态路径含未验证命令");
+              }
+            } else samples = Array.from({ length: count + 1 }, (_, i) => edge.getPointAtLength(length * i / count));
+            for (const p of samples) {
               const raw = new DOMPoint(p.x, p.y).matrixTransform(edge.getScreenCTM()).matrixTransform(inverse);
               // getPointAtLength 的浮点噪声会把同一 y=32 的公共直线采成32.000006，
               // 再误报穿越。仅量化到万分之一SVG单位，仍远小于可见几何误差。
@@ -82,6 +104,7 @@ Completed --> [*]`);
   for (const sample of report.verified.filter(s=>s.svg)) {
     if (sample.id.includes("state")) {
       sample.ports = await page.evaluate(inspectStatePorts, sample.svg);
+      sample.stateGeometry = await page.evaluate(inspectStateLayout, sample.svg);
     }
     if (sample.crossings.length) await fs.writeFile(path.join(output, `${sample.id}-crossing.svg`), sample.svg);
     delete sample.svg;
@@ -91,6 +114,7 @@ Completed --> [*]`);
     assert.equal(sample.routing.status, "clear", `${sample.id} 尚有未解交叉`);
     assert.equal(sample.crossings.length, 0, `${sample.id} 最终SVG独立采样发现交叉: ${JSON.stringify(sample.crossings)}`);
     if (sample.ports) {
+      assert.deepEqual(sample.stateGeometry.issues, [], `${sample.id} 条件框或状态框端口失败`);
       assert.equal(sample.ports.length, sample.routing.checkedEdges, `${sample.id} 端口检查不能遗漏边`);
       for (const edge of sample.ports) for (const port of edge.endpoints) {
         assert(edge.sharedArrowValid && port.middleError < .1 && port.contourGap < 1.2

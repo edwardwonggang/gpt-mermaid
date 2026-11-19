@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { inspectStateLayout } from "./state-layout-geometry.mjs";
 
 export async function verifyLayoutQuality(page, output) {
   await fs.mkdir(output, { recursive: true });
@@ -70,7 +71,7 @@ Charge --> Pack[Pack order] --> Ship[Ship parcel] --> Deliver[Confirm delivery] 
             const p = rootPoint(edge, edge.getPointAtLength(len * i / steps));
             nearest = Math.min(nearest, Math.hypot(p.x - center.x, p.y - center.y));
           }
-          labels.push({ text: label.textContent, distance: nearest,
+          labels.push({ text: label.textContent, distance: nearest, portLayout: Boolean(label.dataset.gptmLabelPorts),
             overlapsNode: nodes.some((n) => b.x < n.box.right && b.right > n.box.x && b.y < n.box.bottom && b.bottom > n.box.y) });
         }
         const c4 = [...svg.querySelectorAll(".c4-shape")].map((node) => {
@@ -92,6 +93,12 @@ Charge --> Pack[Pack order] --> Ship[Ship parcel] --> Deliver[Confirm delivery] 
     return results;
   });
   for (const item of report) {
+    if (item.labels.some(label => label.portLayout)) {
+      const state = await page.evaluate(inspectStateLayout, item.svg);
+      assert.equal(state.displaySegments, item.edges);
+      assert.deepEqual(state.issues, [], `${item.id} 条件框端口验收失败`);
+      item.stateGeometry = { ports: state.ports, labels: state.labels, issues: state.issues };
+    }
     await fs.writeFile(path.join(output, `${item.id}.svg`), item.svg);
     delete item.svg;
   }
@@ -99,7 +106,8 @@ Charge --> Pack[Pack order] --> Ship[Ship parcel] --> Deliver[Confirm delivery] 
   for (const item of report) {
     assert.equal(item.collisions.length, 0, `${item.id} 连线穿过非目标节点：${JSON.stringify(item.collisions)}`);
     for (const label of item.labels) {
-      assert(label.distance < 0.25, `${item.id} 标签不在线上：${JSON.stringify(label)}`);
+      assert(label.portLayout ? Boolean(item.stateGeometry) : label.distance < 0.25,
+        `${item.id} 标签不在线上或未通过独立端口验收：${JSON.stringify(label)}`);
       assert(!label.overlapsNode, `${item.id} 标签覆盖节点：${JSON.stringify(label)}`);
     }
     for (const loop of item.loops) assert(loop.gap >= 20 && loop.reach >= 38, `${item.id} 自环间距不足：${JSON.stringify(loop)}`);

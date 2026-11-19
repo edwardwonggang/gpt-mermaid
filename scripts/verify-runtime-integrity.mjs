@@ -14,8 +14,9 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXPECTED_MERMAID_VERSION = "12.3.0";
-const EXPECTED_BYTES = 5_655_494;
-const EXPECTED_SHA256 = "796cce6f920ad7a9372eb6e85b8ab85b29f939d6baacf6b4f64a8e7b3f55b124";
+// 公开内嵌ELK布局及同次解析状态模型，不新增另一份引擎或第二次解析。
+const EXPECTED_BYTES = 5_656_054;
+const EXPECTED_SHA256 = "a34281c56acf5c0edbe37638d19e8831a8f6687db337b6201d31664752f3ae25";
 
 const patchScript = fs.readFileSync(path.join(root, "scripts/apply-patch.mjs"), "utf8");
 const versionMatch = patchScript.match(/const VERSION = ["']([^"']+)["'];/);

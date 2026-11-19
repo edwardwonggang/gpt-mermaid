@@ -10,12 +10,12 @@ import { applyAdaptiveFlowLayout } from "./svg-adaptive.js";
 import { resolveEdgeCrossings, recordCrossings } from "./svg-crossings.js";
 import {
   DEFAULT_RENDER_TIMEOUT_MS,
-  DEFAULT_RUNTIME_TIMEOUT_MS,
   createSerialScheduler,
   positiveTimeout,
   throwIfAborted,
-  withAbortTimeout,
 } from "./runtime-guard.js";
+import { loadRuntime } from "./runtime-loader.js";
+import { layoutStateSvg } from "./state-svg.js";
 
 const FLOWCHART_RE = /^\s*(?:flowchart|graph)\b/im;
 // Mermaid 的 frontmatter 必须是文档首部独立的 `---` 行；不能把 YAML
@@ -296,8 +296,8 @@ function layoutPoints(edge) {
 }
 
 function nodeOutlines(svg) {
-  return [...svg.querySelectorAll("g.node, g.cluster, g.statediagram-cluster")].map((node) => {
-    const container = nodeShape(node);
+  return [...svg.querySelectorAll("g.node, g.cluster, g.statediagram-cluster, g.edgeLabel[data-gptm-label-owner]")].map((node) => {
+    const container = nodeShape(node) || node.querySelector("g.label rect.background,rect.labelBkg");
     if (!container) return null;
     const shape = container instanceof SVGGeometryElement ? container : container.querySelector("path,rect,polygon,circle,ellipse");
     if (!shape || typeof shape.isPointInFill !== "function") return null;
@@ -470,7 +470,7 @@ function repairSequenceConnections(svg) {
   }
 }
 
-function attachForGeometry(svg, callback) {
+async function attachForGeometry(svg, callback) {
   if (typeof document === "undefined" || !document.body) return null;
   const host = document.createElement("div");
   host.setAttribute("aria-hidden", "true");
@@ -483,13 +483,13 @@ function attachForGeometry(svg, callback) {
   host.append(live);
   document.body.append(host);
   try {
-    return callback(live);
+    return await callback(live);
   } finally {
     host.remove();
   }
 }
 
-function postProcessSvg(svgMarkup, variables, graph, config = {}) {
+async function postProcessSvg(svgMarkup, variables, graph, config = {}) {
   const doc = new DOMParser().parseFromString(svgMarkup, "image/svg+xml");
   const svg = doc.documentElement;
   if (doc.querySelector("parsererror") || svg?.localName !== "svg") return svgMarkup;
@@ -554,8 +554,12 @@ function postProcessSvg(svgMarkup, variables, graph, config = {}) {
   }
   // 连线贴边需要真实浏览器的布局坐标；在不支持 DOM 测量的环境里保持
   // 原 SVG，不能因为无法测量而丢掉整张图。
-  const measured = attachForGeometry(svg, (live) => {
+  const measured = await attachForGeometry(svg, async (live) => {
     fixSvgLabels(live, variables);
+    if (graph?.state) {
+      await layoutStateSvg(live, graph.state, graph.layout, variables, config.signal);
+      repairEdgeConnections(live);
+    } else {
     if (graph?.edges) {
       applyAdaptiveFlowLayout(live, graph, config.adaptiveLayout);
       routeFlowEdges(live, graph);
@@ -573,6 +577,7 @@ function postProcessSvg(svgMarkup, variables, graph, config = {}) {
       repairEdgeConnections(live);
       placeEdgeLabels(live);
     }
+    }
     if (graph || Number(live.getAttribute("data-gptm-native-routes")) > 0
         || live.hasAttribute("data-gptm-planar-layout")
         || Number(live.getAttribute("data-gptm-spacing-factor")) > 1) fitSvgBounds(live);
@@ -586,73 +591,31 @@ function postProcessSvg(svgMarkup, variables, graph, config = {}) {
   return measured || new XMLSerializer().serializeToString(svg);
 }
 
-function absoluteRuntimeUrl(config, baseUrl) {
-  const raw = config.runtimeUrl || "gpt-mermaid.runtime.min.js";
-  try {
-    return new URL(raw, config.baseUrl || baseUrl || document.baseURI).href;
-  } catch {
-    return raw;
+// 下载可共享同一实例；串行锁与初始化缓存也必须跟随实例，不能各 renderer 自管。
+const runtimeStates = new WeakMap();
+
+function runtimeState(runtime) {
+  let state = runtimeStates.get(runtime);
+  if (!state) {
+    state = { queue: createSerialScheduler(), configKey: null };
+    runtimeStates.set(runtime, state);
   }
+  return state;
 }
 
-function loadScript(url) {
-  const existing = [...document.querySelectorAll("script[data-gpt-mermaid-runtime]")]
-    .find((script) => script.dataset.gptMermaidRuntime === url);
-  if (existing) {
-    return existing.dataset.loaded === "true"
-      ? Promise.resolve()
-      : new Promise((resolve, reject) => {
-        existing.addEventListener("load", resolve, { once: true });
-        existing.addEventListener("error", () => reject(new Error("gpt-mermaid: failed to load runtime")), { once: true });
-      });
-  }
-  return new Promise((resolve, reject) => {
-    const script = document.createElement("script");
-    script.src = url;
-    script.async = true;
-    script.dataset.gptMermaidRuntime = url;
-    script.addEventListener("load", () => {
-      script.dataset.loaded = "true";
-      resolve();
-    }, { once: true });
-    script.addEventListener("error", () => reject(new Error(`gpt-mermaid: failed to load ${url}`)), { once: true });
-    document.head.append(script);
-  });
-}
-
-export function createRenderer(baseUrl = document.baseURI) {
-  let runtimePromise = null;
-  const renderQueue = createSerialScheduler();
+export function createRenderer(baseUrl = globalThis.document?.baseURI) {
   let sequence = 0;
-  let initialized = false;
-  let configKey = "";
 
-  async function runtime(config = {}, signal) {
-    throwIfAborted(signal);
-    if (config.runtime && typeof config.runtime.render === "function") return config.runtime;
-    if (globalThis.mermaid?.render) return globalThis.mermaid;
-    if (!runtimePromise) {
-      const url = absoluteRuntimeUrl(config, baseUrl);
-      runtimePromise = loadScript(url).then(() => {
-        if (!globalThis.mermaid?.render) throw new Error("gpt-mermaid: runtime did not expose window.mermaid");
-        return globalThis.mermaid;
-      }).catch((error) => {
-        runtimePromise = null;
-        throw error;
-      });
-    }
-    return withAbortTimeout(runtimePromise, {
-      signal,
-      timeoutMs: positiveTimeout(config.runtimeTimeoutMs, DEFAULT_RUNTIME_TIMEOUT_MS),
-      timeoutMessage: "gpt-mermaid: runtime load timed out",
-    });
+  function runtime(config = {}, signal) {
+    return loadRuntime(config, baseUrl, signal);
   }
 
   function initialize(mermaid, config, flowchart, stateDiagram) {
     const layout = flowchart ? "elk" : "dagre";
     const nextKey = JSON.stringify({ preset: config.preset, themeVariables: config.themeVariables,
       isDark: config.isDark, layout, state: stateDiagram ? "wide" : "default" });
-    if (initialized && configKey === nextKey) return;
+    const state = runtimeState(mermaid);
+    if (state.configKey === nextKey) return;
     mermaid.initialize({
       startOnLoad: false,
       securityLevel: "strict",
@@ -697,8 +660,7 @@ export function createRenderer(baseUrl = document.baseURI) {
       architecture: { useMaxWidth: false },
       radar: { useMaxWidth: false },
     });
-    initialized = true;
-    configKey = nextKey;
+    state.configKey = nextKey;
   }
 
   async function renderSvg(rawSource, config = {}) {
@@ -708,19 +670,22 @@ export function createRenderer(baseUrl = document.baseURI) {
       config.renderTimeoutMs ?? config.timeoutMs,
       DEFAULT_RENDER_TIMEOUT_MS,
     );
+    // 下载、排队、执行分别计时，预加载与 renderSvg 消费同一下载记录。
+    const mermaid = await runtime(config, config.signal);
+    const renderQueue = runtimeState(mermaid).queue;
     return renderQueue.schedule(async (signal) => {
       throwIfAborted(signal);
       const flowchart = isFlowchart(source);
       const stateDiagram = isStateDiagram(source);
-      const mermaid = await runtime(config, signal);
-      throwIfAborted(signal);
       initialize(mermaid, config, flowchart, stateDiagram);
       const id = `mgpt-${Date.now().toString(36)}-${++sequence}`;
       const result = await mermaid.render(id, source);
       throwIfAborted(signal);
       if (!result?.svg) throw new Error("gpt-mermaid: renderer returned no SVG");
       let graph;
-      if (mermaid.mermaidAPI?.getDiagramFromText && (flowchart || /^\s*C4\w+/m.test(source))) {
+      if (stateDiagram && result.gptMermaidStateModel) {
+        graph = { state: result.gptMermaidStateModel, layout: mermaid.gptMermaidLayout };
+      } else if (mermaid.mermaidAPI?.getDiagramFromText && (flowchart || /^\s*C4\w+/m.test(source))) {
         const diagram = await mermaid.mermaidAPI.getDiagramFromText(source);
         throwIfAborted(signal);
         if (flowchart && diagram.db.getData) graph = { ...diagram.db.getData(), direction: diagram.db.getDirection() };
@@ -734,7 +699,7 @@ export function createRenderer(baseUrl = document.baseURI) {
         const style = `<style id="mgpt-global-theme">${themeCSS}</style>`;
         svg = svg.replace(/<svg\b[^>]*>/, (tag) => `${tag}${style}`);
       }
-      const processed = postProcessSvg(svg, config.themeVariables, graph, config);
+      const processed = await postProcessSvg(svg, config.themeVariables, graph, { ...config, signal });
       throwIfAborted(signal);
       const clean = sanitizeSvgMarkup(processed);
       const size = svgSize(clean);

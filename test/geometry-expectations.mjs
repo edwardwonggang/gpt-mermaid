@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 export const BASE_GEOMETRY_EXPECTATIONS = Object.freeze({
   sampleCount: 100,
   // 固定中点汇入共用一个三角；状态图逻辑边数量和共享末段另由 state-ports 验收。
-  totalTriangles: 448,
+  totalTriangles: 446,
   keyTriangles: Object.freeze({
     "flow-minimal": 1,
     "flow-branch": 3,
@@ -18,10 +18,10 @@ export const BASE_GEOMETRY_EXPECTATIONS = Object.freeze({
     state: 6,
     "stress-state-composite": 11,
     "stress-state-parallel": 9,
-    "stress-state-choice": 8,
+    "stress-state-choice": 7,
     "stress-state-fork-join": 7,
     "stress-state-notes": 3,
-    "stress-state-long": 15,
+    "stress-state-long": 14,
     sequence: 4,
     class: 3,
     "stress-flow-td-long-chain": 16,

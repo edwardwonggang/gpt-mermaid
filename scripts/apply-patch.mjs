@@ -333,6 +333,42 @@ js = replaceOnce(
         svgPath.attr("data-target", edge.end);`
 );
 
+// 状态图统一布局直接消费已内嵌的ELK，不再下载第二份引擎。
+// 仅暴露普通数据图布局；语义、端口和最终验收由独立模块负责。
+js = replaceOnce(
+  js,
+  '公开固定runtime的布局能力',
+  `  var mermaid_default = mermaid;`,
+  `  let gptMermaidLayoutEngine;
+  mermaid.gptMermaidLayout = async function(graph) {
+    if (!gptMermaidLayoutEngine) {
+      const LayoutEngine = require_elk_bundled();
+      gptMermaidLayoutEngine = new LayoutEngine();
+    }
+    return gptMermaidLayoutEngine.layout(graph);
+  };
+  var mermaid_default = mermaid;`
+);
+
+js = replaceOnce(
+  js,
+  '状态图返回同次解析的语义模型',
+  `      diagramType,
+      svg: svgCode,
+      bindFunctions: diag.db.bindFunctions`,
+  `      diagramType,
+      svg: svgCode,
+      gptMermaidStateModel: diagramType === "stateDiagram" ? {
+        direction: diag.db.getDirection(),
+        nodes: diag.db.getData().nodes.map(({id, label, shape, parentId, isGroup, position}) =>
+          ({id, label, shape, parentId, isGroup, position})),
+        edges: diag.db.getData().edges.map(({id, start, end, label, arrowTypeEnd, pattern, classes}) =>
+          ({id, source:start, target:end, label:label || "", arrow:arrowTypeEnd !== "", pattern,
+            note:(classes || "").split(" ").includes("note-edge")}))
+      } : undefined,
+      bindFunctions: diag.db.bindFunctions`
+);
+
 fs.mkdirSync(DIST_DIR, { recursive: true });
 const outJs = path.join(DIST_DIR, 'gpt-mermaid.runtime.js');
 fs.writeFileSync(outJs, js);

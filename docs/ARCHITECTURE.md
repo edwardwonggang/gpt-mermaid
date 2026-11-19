@@ -29,7 +29,7 @@ Blob URL → <img> → zoom/pan/fullscreen UI
 
 1. `src/defaults.js`: presets and Mermaid theme variables.
 2. `src/sanitize.js`: frontmatter/source filtering, SVG allowlist and scoped style sanitization.
-3. `src/render.js`: runtime loading, Mermaid initialization and SVG post-processing.
+3. `src/render.js`: Mermaid初始化、各图种调度、主题和SVG后处理；状态图调用独立约束布局。
 4. `src/ui.js`: DOM presentation, interactions and export actions.
 5. `src/factory.js`: stable public API shared by UMD, ESM and CJS builds.
 6. `src/svg-labels.js`: measured node titles, visible journey labels and sequence counters; ER attribute columns remain under the layout engine.
@@ -40,21 +40,24 @@ Blob URL → <img> → zoom/pan/fullscreen UI
 11. `src/path-intersections.js`：纯几何线段穿越、接触与重叠判定。
 12. `src/svg-crossings.js`：读取最终路径命令，细分曲线并检测边对交叉；有界避障、整组调整、间距重试及结果报告。
 13. `src/planar-layout.js`：平坦少量关系的结构化外围环/重心候选；只返回非退化零交叉坐标，实际矩形和标签由SVG层另验。
-14. `src/runtime-guard.js`：统一超时、`AbortSignal` 与严格串行调度；排队项可取消，任务超时后会释放队列。
+14. `src/runtime-guard.js`：统一超时、`AbortSignal` 与严格串行调度；排队项可取消，执行槽仅在真实任务结束后释放。
+15. `src/runtime-loader.js`：按document/URL共享下载、捕获所属script的实际导出、失败清理及重试；不隐式接管任意全局Mermaid。
+16. `src/state-model.js`、`state-layout.js`：同次解析语义、条件框、固定中点、引线预留、反馈边和复合状态统一布局；复用runtime已内嵌ELK。
+17. `src/state-constraints.js`：只读验证语义完整性、端口、直段、障碍和共享规则；`state-svg.js`消费冻结结果一次绘制，条件关系显示为两段path且保留同一owner。
 
 The runtime is intentionally loaded lazily. A page that never renders a Mermaid
 diagram does not pay the 5.4 MB runtime cost.
 
 The default guards are 12 seconds for a render and 15 seconds for runtime loading.
 `renderTimeoutMs` and `runtimeTimeoutMs` override them per call. A timeout or abort
-rejects the wait with `TimeoutError` / `AbortError`; a third-party task that ignores
-its signal may still finish in the background, but it cannot permanently hold the
-next serialized render.
+rejects the wait with `TimeoutError` / `AbortError`。实际执行仍在进行时保持串行槽，
+后续排队请求也有截止；不能因为等待超时就在同一个可变runtime并发执行下一任务。
+永久挂死的第三方执行需要可销毁上下文才能自动恢复成功，本实现不伪造恢复结果。
 
 ## Invariants
 
 - Only one rendered `<img>` exists per mounted diagram.
-- The source `<pre>` remains in the DOM but hidden, so copy and retry stay possible.
+- 独立UI原源码保存与主站接管策略分别管理；主站不保留可被第二个扫描器接管的隐藏语言源码DOM，复制和重试来自实例记录。
 - Inline ordinary wheel events bubble to the page; `Ctrl+wheel` zooms inline. In the fullscreen viewer, ordinary wheel zooms around the pointer.
 - A fullscreen viewer moves the existing stage, never creates a second image.
 - 全屏触屏使用前两根活动指针的固定手势基线计算缩放/平移，成员变化时重建基线；禁止逐事件夹紧后累乘倍率，否则边界处等距平移会误缩放。行内触屏不捕获，保留页面滚动/缩放。
@@ -75,7 +78,7 @@ next serialized render.
   同向同侧在框外分叉/汇合，只共享可证明连续的首/尾段；共享末端显示一个三角，但保留每条逻辑边和标签。
   复合状态外框来自`g.statediagram-cluster[data-id]`，内部路由不把自己的祖先填充区当障碍。
   每次改路清除旧标签预留点；标签位置必须属于当前路径。
-- 后处理顺序：文字校准 → 可选折返 → 路由整理 → 真实轮廓贴边 → 标签投影 → 通用交叉避障与必要贴边复核 → 画布尺寸 → 方向色和箭头 → 线杆裁切 → 最终交叉报告。
+- 非状态图仍保留原后处理；状态图为文字/尺寸测量 → 语义与条件框统一布局 → 全约束验证 → 绘制 → 实际轮廓贴边 → 方向色、箭头与裁线 → 最终几何报告。不能再次调用旧标签投影或通用改路破坏已验收几何。
 - 折返不改图源、不镜像文字。反馈、跨层和子图等无安全切口的情况明确保留原布局。
 - 不以图名、节点文字或源码关键词选择避障分支。原路径可用时保留；候选必须检查完整路径的自交、重走、长度及折弯。
 - 已放标签立即移动实际DOM，下一条边必须读取新位置。特殊端点留白和首尾切线不可随正交端口投影丢失。

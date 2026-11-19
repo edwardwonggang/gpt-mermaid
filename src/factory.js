@@ -34,6 +34,10 @@ export function createGPTMermaid(globalObject, baseUrl) {
     return renderer.renderSvg(source, effective);
   }
 
+  function load(options = {}) {
+    return renderer.load(resolveConfig(options, config));
+  }
+
   async function mount(target, source, options = {}) {
     const effective = resolveConfig(options, config);
     if (globalObject.document) injectStyles(globalObject.document, effective.autoInjectStyles);
@@ -73,6 +77,7 @@ export function createGPTMermaid(globalObject, baseUrl) {
     version: VERSION,
     presets: PRESETS,
     configure,
+    load,
     renderSvg,
     sanitizeSource: sanitizeMermaidSource,
     sanitizeSvg: sanitizeSvgMarkup,
